@@ -39,9 +39,6 @@ lerna-debug.log*
 !.vscode/launch.json
 !.vscode/extensions.json
 
-# Dependencies
-**/package-lock.json
-
 # Environment
 **/.env
 
@@ -61,20 +58,6 @@ lerna-debug.log*
 # Docker volume for SQLite files
 /**/data/*
 !/**/data/.gitkeep
-
-# Files uploaded by users
-/cvm-backend/uploads/*
-
-# SSL certificates
-/cvm-reverse-proxy/certs/
-!/cvm-reverse-proxy/certs/.gitkeep
-
-# Quasar core related directories
-**/.quasar
-**/quasar.config.*.temporary.compiled*
-
-# Fonts
-/cvm-app/public/fonts/*
 
 # LLM instructions
 **/gpt-*.md
