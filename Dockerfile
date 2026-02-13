@@ -4,9 +4,15 @@ WORKDIR /usr/src/app
 
 COPY package.json package-lock.json* ./
 
-RUN npm ci
+USER root
+RUN npm ci \
+  && chown -R myuser:myuser /usr/src/app
 
 COPY . ./
+
+RUN chown -R myuser:myuser /usr/src/app
+
+USER myuser
 
 RUN npm run build
 
