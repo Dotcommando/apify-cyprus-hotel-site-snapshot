@@ -1,81 +1,86 @@
 {
-  "title": "Input",
-  "description": "Raw snapshot collector for a single hotel website: grabs up to 10 pages (depth<=2), stores HTML, and captures mobile home screenshots (initial/after consent/after scroll) plus layout snapshots.",
+  "title": "Cyprus Hotel Site Snapshot Input",
+  "description": "Collect raw HTML and mobile screenshots (home page) for a single hotel website.",
   "type": "object",
   "schemaVersion": 1,
   "properties": {
     "hotelId": {
       "title": "Hotel ID",
-      "description": "MongoDB hotels._id as string. Used only for joining outputs with your DB.",
-      "type": "string"
+      "description": "MongoDB hotels._id as string. Used to join snapshot with your database.",
+      "type": "string",
+      "editor": "textfield"
     },
     "domain": {
       "title": "Domain",
-      "description": "Hotel website domain without protocol (e.g. example.com). The actor will start from https://<domain>/ unless seedUrls are provided.",
-      "type": "string"
+      "description": "Hotel website domain without protocol (example.com).",
+      "type": "string",
+      "editor": "textfield"
     },
     "seedUrls": {
       "title": "Seed URLs",
-      "description": "Optional list of starting URLs. If empty, actor uses https://<domain>/ as the only seed.",
+      "description": "Optional list of starting URLs. If empty, https://<domain>/ will be used.",
       "type": "array",
-      "items": { "type": "string" },
+      "editor": "stringList",
+      "items": {
+        "type": "string"
+      },
       "default": []
     },
     "maxPages": {
       "title": "Max pages",
-      "description": "Maximum number of pages to crawl in total (including home). Keep low to control Apify costs.",
+      "description": "Maximum number of pages to crawl (cost control).",
       "type": "integer",
+      "editor": "number",
       "default": 10,
       "minimum": 1,
       "maximum": 50
     },
     "maxDepth": {
       "title": "Max depth",
-      "description": "Maximum link distance from home. Depth 0 is seed/home. Default 2.",
+      "description": "Maximum link depth from home page.",
       "type": "integer",
+      "editor": "number",
       "default": 2,
       "minimum": 0,
       "maximum": 5
     },
     "collectHtml": {
       "title": "Collect HTML",
-      "description": "If true, store raw HTML for each visited page in the dataset output.",
+      "description": "Store raw HTML for each visited page.",
       "type": "boolean",
+      "editor": "checkbox",
       "default": true
     },
     "mobileViewport": {
       "title": "Mobile viewport",
-      "description": "Viewport size used for mobile rendering and screenshots on the home page.",
+      "description": "Viewport size for mobile rendering.",
       "type": "object",
-      "default": { "width": 390, "height": 844 },
-      "properties": {
-        "width": {
-          "type": "integer",
-          "description": "Viewport width in pixels (e.g. 390)."
-        },
-        "height": {
-          "type": "integer",
-          "description": "Viewport height in pixels (e.g. 844)."
-        }
+      "editor": "json",
+      "default": {
+        "width": 390,
+        "height": 844
       }
     },
     "collectDesktop": {
-      "title": "Collect desktop home screenshot",
-      "description": "If true, also capture one desktop (1366x768) top-of-page screenshot for the home page. Default false.",
+      "title": "Collect desktop screenshot",
+      "description": "Also capture desktop home screenshot (1366x768).",
       "type": "boolean",
+      "editor": "checkbox",
       "default": false
     },
     "consentClickStrategy": {
       "title": "Consent click strategy",
-      "description": "How to handle cookie/consent banners on home before the after-consent screenshot. 'minimal' tries a few common Accept/Close buttons if visible.",
+      "description": "How to handle cookie banner on home page.",
       "type": "string",
+      "editor": "select",
       "enum": ["none", "minimal"],
       "default": "minimal"
     },
     "timeoutMsPerPage": {
       "title": "Timeout per page (ms)",
-      "description": "Navigation timeout per page in milliseconds (Playwright).",
+      "description": "Playwright navigation timeout per page.",
       "type": "integer",
+      "editor": "number",
       "default": 60000,
       "minimum": 15000,
       "maximum": 180000
