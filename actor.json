@@ -1,0 +1,64 @@
+{
+  "actorSpecification": 1,
+  "name": "cyprus-hotel-site-snapshot",
+  "title": "Cyprus Hotel Site Snapshot (Raw)",
+  "description": "Collect raw HTML + mobile screenshots (home) + layout snapshots with robust error taxonomy",
+  "version": "1.0",
+  "storages": {
+    "dataset": {
+      "actorSpecification": 1,
+      "views": {
+        "overview": {
+          "title": "Overview",
+          "transformation": {
+            "fields": [
+              "runStatus",
+              "snapshot.stats.pagesVisited",
+              "snapshot.stats.errorsCount",
+              "runMeta.startedAt",
+              "runMeta.finishedAt",
+              "snapshot.domain"
+            ]
+          },
+          "display": {
+            "component": "table",
+            "properties": {
+              "runStatus": { "label": "Status" },
+              "snapshot.stats.pagesVisited": { "label": "Pages" },
+              "snapshot.stats.errorsCount": { "label": "Errors" },
+              "snapshot.domain": { "label": "Domain" },
+              "runMeta.startedAt": { "label": "Started" },
+              "runMeta.finishedAt": { "label": "Finished" }
+            }
+          }
+        }
+      }
+    }
+  },
+  "input": {
+    "title": "Input",
+    "type": "object",
+    "schemaVersion": 1,
+    "properties": {
+      "hotelId": { "title": "Hotel ID", "type": "string" },
+      "domain": { "title": "Domain", "type": "string" },
+      "seedUrls": { "title": "Seed URLs", "type": "array", "items": { "type": "string" }, "default": [] },
+      "maxPages": { "title": "Max pages", "type": "integer", "default": 10, "minimum": 1, "maximum": 50 },
+      "maxDepth": { "title": "Max depth", "type": "integer", "default": 2, "minimum": 0, "maximum": 5 },
+      "collectHtml": { "title": "Collect HTML", "type": "boolean", "default": true },
+      "mobileViewport": {
+        "title": "Mobile viewport",
+        "type": "object",
+        "default": { "width": 390, "height": 844 },
+        "properties": {
+          "width": { "type": "integer" },
+          "height": { "type": "integer" }
+        }
+      },
+      "collectDesktop": { "title": "Collect desktop screenshot for home", "type": "boolean", "default": false },
+      "consentClickStrategy": { "title": "Consent click strategy", "type": "string", "enum": ["none", "minimal"], "default": "minimal" },
+      "timeoutMsPerPage": { "title": "Timeout per page (ms)", "type": "integer", "default": 60000, "minimum": 15000, "maximum": 180000 }
+    },
+    "required": ["hotelId", "domain"]
+  }
+}
