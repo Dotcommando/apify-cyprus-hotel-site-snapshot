@@ -432,7 +432,7 @@ const crawler = new PlaywrightCrawler({
       await page.route('**/*', (route) => {
         const r = route.request();
         const rt = r.resourceType();
-        if (rt === 'media' || rt === 'font') return route.abort();
+        if (rt === 'font') return route.abort();
         return route.continue();
       });
 
