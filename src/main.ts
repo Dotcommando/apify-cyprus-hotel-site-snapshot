@@ -337,6 +337,8 @@ function kvSafeKey(key: string): string {
 
 await Actor.init();
 
+const kvStoreId = Actor.getEnv().defaultKeyValueStoreId || null;
+
 const inputRaw = (await Actor.getInput<IActorInput>()) || ({} as IActorInput);
 
 const hotelId = String(inputRaw.hotelId || '').trim();
@@ -371,6 +373,11 @@ const pages: IPageRecord[] = [];
 const errors: IActorError[] = [];
 const redirectChains: IRedirectChainItem[] = [];
 
+function kvRecordUrlOrRef(key: string): string {
+  if (!kvStoreId) return `KV:${key}`;
+  return `https://api.apify.com/v2/key-value-stores/${kvStoreId}/records/${encodeURIComponent(key)}?attachment=true`;
+}
+
 function pushError(e: Omit<IActorError, 'id' | 'createdAt'>): void {
   errors.push({
     id: buildErrorId(),
@@ -390,17 +397,13 @@ for (const url of seedUrls) {
   });
 }
 
-function kvRef(key: string): string {
-  return `KV:${key}`;
-}
-
 async function saveScreenshot(key: string, buf: Buffer | null): Promise<string | null> {
   if (!buf) return null;
   const safeKey = kvSafeKey(key);
 
   try {
     await Actor.setValue(safeKey, buf, { contentType: 'image/png' });
-    return kvRef(safeKey);
+    return kvRecordUrlOrRef(safeKey);
   } catch (e) {
     pushError({
       stage: EErrorStage.STORAGE,
