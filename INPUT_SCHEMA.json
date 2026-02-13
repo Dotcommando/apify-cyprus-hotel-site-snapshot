@@ -1,26 +1,85 @@
 {
   "title": "Input",
+  "description": "Raw snapshot collector for a single hotel website: grabs up to 10 pages (depth<=2), stores HTML, and captures mobile home screenshots (initial/after consent/after scroll) plus layout snapshots.",
   "type": "object",
   "schemaVersion": 1,
   "properties": {
-    "hotelId": { "title": "Hotel ID", "type": "string" },
-    "domain": { "title": "Domain", "type": "string" },
-    "seedUrls": { "title": "Seed URLs", "type": "array", "items": { "type": "string" }, "default": [] },
-    "maxPages": { "title": "Max pages", "type": "integer", "default": 10, "minimum": 1, "maximum": 50 },
-    "maxDepth": { "title": "Max depth", "type": "integer", "default": 2, "minimum": 0, "maximum": 5 },
-    "collectHtml": { "title": "Collect HTML", "type": "boolean", "default": true },
+    "hotelId": {
+      "title": "Hotel ID",
+      "description": "MongoDB hotels._id as string. Used only for joining outputs with your DB.",
+      "type": "string"
+    },
+    "domain": {
+      "title": "Domain",
+      "description": "Hotel website domain without protocol (e.g. example.com). The actor will start from https://<domain>/ unless seedUrls are provided.",
+      "type": "string"
+    },
+    "seedUrls": {
+      "title": "Seed URLs",
+      "description": "Optional list of starting URLs. If empty, actor uses https://<domain>/ as the only seed.",
+      "type": "array",
+      "items": { "type": "string" },
+      "default": []
+    },
+    "maxPages": {
+      "title": "Max pages",
+      "description": "Maximum number of pages to crawl in total (including home). Keep low to control Apify costs.",
+      "type": "integer",
+      "default": 10,
+      "minimum": 1,
+      "maximum": 50
+    },
+    "maxDepth": {
+      "title": "Max depth",
+      "description": "Maximum link distance from home. Depth 0 is seed/home. Default 2.",
+      "type": "integer",
+      "default": 2,
+      "minimum": 0,
+      "maximum": 5
+    },
+    "collectHtml": {
+      "title": "Collect HTML",
+      "description": "If true, store raw HTML for each visited page in the dataset output.",
+      "type": "boolean",
+      "default": true
+    },
     "mobileViewport": {
       "title": "Mobile viewport",
+      "description": "Viewport size used for mobile rendering and screenshots on the home page.",
       "type": "object",
       "default": { "width": 390, "height": 844 },
       "properties": {
-        "width": { "type": "integer" },
-        "height": { "type": "integer" }
+        "width": {
+          "type": "integer",
+          "description": "Viewport width in pixels (e.g. 390)."
+        },
+        "height": {
+          "type": "integer",
+          "description": "Viewport height in pixels (e.g. 844)."
+        }
       }
     },
-    "collectDesktop": { "title": "Collect desktop screenshot for home", "type": "boolean", "default": false },
-    "consentClickStrategy": { "title": "Consent click strategy", "type": "string", "enum": ["none", "minimal"], "default": "minimal" },
-    "timeoutMsPerPage": { "title": "Timeout per page (ms)", "type": "integer", "default": 60000, "minimum": 15000, "maximum": 180000 }
+    "collectDesktop": {
+      "title": "Collect desktop home screenshot",
+      "description": "If true, also capture one desktop (1366x768) top-of-page screenshot for the home page. Default false.",
+      "type": "boolean",
+      "default": false
+    },
+    "consentClickStrategy": {
+      "title": "Consent click strategy",
+      "description": "How to handle cookie/consent banners on home before the after-consent screenshot. 'minimal' tries a few common Accept/Close buttons if visible.",
+      "type": "string",
+      "enum": ["none", "minimal"],
+      "default": "minimal"
+    },
+    "timeoutMsPerPage": {
+      "title": "Timeout per page (ms)",
+      "description": "Navigation timeout per page in milliseconds (Playwright).",
+      "type": "integer",
+      "default": 60000,
+      "minimum": 15000,
+      "maximum": 180000
+    }
   },
   "required": ["hotelId", "domain"]
 }
