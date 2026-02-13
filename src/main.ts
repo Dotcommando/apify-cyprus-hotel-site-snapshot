@@ -326,6 +326,15 @@ function truncate(s: string, max: number): string {
   return str.length > max ? str.slice(0, max) : str;
 }
 
+function kvSafeKey(key: string): string {
+  // Apify KV key must be a single "filename-like" token (no slashes).
+  // Keep it deterministic and readable.
+  return key
+    .replace(/[\/\\]+/g, '_')
+    .replace(/[^a-zA-Z0-9!\-_.()']/g, '_')
+    .slice(0, 240);
+}
+
 await Actor.init();
 
 const inputRaw = (await Actor.getInput<IActorInput>()) || ({} as IActorInput);
@@ -333,8 +342,8 @@ const inputRaw = (await Actor.getInput<IActorInput>()) || ({} as IActorInput);
 const hotelId = String(inputRaw.hotelId || '').trim();
 const domain = normalizeDomain(inputRaw.domain || '');
 
-const maxPages = Number.isFinite(Number(inputRaw.maxPages)) ? Number(inputRaw.maxPages) : 10;
-const maxDepth = Number.isFinite(Number(inputRaw.maxDepth)) ? Number(inputRaw.maxDepth) : 2;
+const maxPages = Number.isFinite(Number(inputRaw.maxPages)) ? Number(inputRaw.maxPages) : 4;
+const maxDepth = Number.isFinite(Number(inputRaw.maxDepth)) ? Number(inputRaw.maxDepth) : 1;
 
 const collectHtml = inputRaw.collectHtml !== false;
 const collectDesktop = inputRaw.collectDesktop === true;
@@ -387,9 +396,11 @@ function kvRef(key: string): string {
 
 async function saveScreenshot(key: string, buf: Buffer | null): Promise<string | null> {
   if (!buf) return null;
+  const safeKey = kvSafeKey(key);
+
   try {
-    await Actor.setValue(key, buf, { contentType: 'image/png' });
-    return kvRef(key);
+    await Actor.setValue(safeKey, buf, { contentType: 'image/png' });
+    return kvRef(safeKey);
   } catch (e) {
     pushError({
       stage: EErrorStage.STORAGE,
@@ -486,7 +497,7 @@ const crawler = new PlaywrightCrawler({
       };
 
       if (isHome) {
-        const baseKey = runId ? `screenshots/${runId}` : 'screenshots';
+        const baseKey = runId ? `screenshots_${runId}` : 'screenshots';
 
         item.mobile = {
           viewport,
