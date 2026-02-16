@@ -6,12 +6,15 @@ import {
   EErrorCode,
   EErrorStage,
   ERunStatus,
+  EXTRA_FILE_TYPE,
   type IActorError,
   type IActorInput,
   type IActorOutput,
   type IAssetsSummary,
   type IConsentLog,
   type IDomMeta,
+  type IExtraFileRecord,
+  type IExtraFilesBlock,
   type ILayoutSnapshot,
   type IPageRecord,
   type IRedirectChainItem,
@@ -20,6 +23,10 @@ import {
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
 function normalizeDomain(domain: string): string {
@@ -67,12 +74,7 @@ function isInternalUrl(urlStr: string, baseDomain: string): boolean {
   }
 }
 
-function detectErrorCode(
-  errMsg: string,
-  status: number | null,
-  isRobots: boolean,
-  bodySnippet: string,
-): EErrorCode {
+function detectErrorCode(errMsg: string, status: number | null, isRobots: boolean, bodySnippet: string): EErrorCode {
   const m = String(errMsg || '').toLowerCase();
   const b = String(bodySnippet || '').toLowerCase();
 
@@ -88,43 +90,72 @@ function detectErrorCode(
   if (m.includes('net::') || m.includes('navigation') || m.includes('blocked')) return EErrorCode.NAVIGATION_FAILED;
   if (m.includes('target closed') || m.includes('page crashed')) return EErrorCode.JS_CRASH;
 
-  if (
-    b.includes('captcha') ||
-    b.includes('are you human') ||
-    b.includes('verify you are') ||
-    b.includes('access denied')
-  ) {
+  if (b.includes('captcha') || b.includes('are you human') || b.includes('verify you are') || b.includes('access denied')) {
     return EErrorCode.CAPTCHA_DETECTED;
   }
 
   return EErrorCode.UNKNOWN;
 }
 
+function buildErrorId(): string {
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function truncate(s: string, max: number): string {
+  const str = String(s || '');
+  return str.length > max ? str.slice(0, max) : str;
+}
+
+function kvSafeKey(key: string): string {
+  return key
+    .replace(/[\/\\]+/g, '_')
+    .replace(/[^a-zA-Z0-9!\-_.()']/g, '_')
+    .slice(0, 240);
+}
+
+function buildHostCandidates(domain: string): string[] {
+  const d = normalizeDomain(domain);
+  const hosts = new Set<string>();
+  if (d) hosts.add(d);
+  if (d && !d.startsWith('www.')) hosts.add(`www.${d}`);
+  return Array.from(hosts);
+}
+
+function buildUrlCandidates(hosts: string[], path: string): string[] {
+  const p = path.startsWith('/') ? path : `/${path}`;
+  const urls: string[] = [];
+  for (const h of hosts) {
+    urls.push(`https://${h}${p}`);
+  }
+  for (const h of hosts) {
+    urls.push(`http://${h}${p}`);
+  }
+  return urls;
+}
+
 async function extractDomMeta(page: PlaywrightCrawlingContext['page']): Promise<IDomMeta> {
-  return page.evaluate(() => {
+  return page.evaluate<IDomMeta>(() => {
     const title = document.title || null;
     const html = document.documentElement;
-    const lang = html?.getAttribute('lang') || null;
+    const lang = html ? html.getAttribute('lang') : null;
 
     const canonicalEl = document.querySelector('link[rel="canonical"]');
-    const canonical = canonicalEl?.getAttribute('href') || null;
+    const canonical = canonicalEl ? canonicalEl.getAttribute('href') : null;
 
     const hreflang = Array.from(document.querySelectorAll('link[rel="alternate"][hreflang]'))
-      .map((el) => ({
-        hreflang: el.getAttribute('hreflang') || '',
-        href: el.getAttribute('href') || '',
-      }))
+      .map((el) => {
+        const hreflangAttr = el.getAttribute('hreflang') || '';
+        const hrefAttr = el.getAttribute('href') || '';
+        return { hreflang: hreflangAttr, href: hrefAttr };
+      })
       .filter((x) => Boolean(x.hreflang) && Boolean(x.href));
 
     return { title, lang, canonical, hreflang };
   });
 }
 
-async function extractOutboundDomains(
-  page: PlaywrightCrawlingContext['page'],
-  baseDomain: string,
-): Promise<string[]> {
-  return page.evaluate((bd) => {
+async function extractOutboundDomains(page: PlaywrightCrawlingContext['page'], baseDomain: string): Promise<string[]> {
+  return page.evaluate<string[], string>((bd) => {
     const domains = new Set<string>();
 
     function addUrl(u: string | null) {
@@ -140,84 +171,113 @@ async function extractOutboundDomains(
       }
     }
 
-    document.querySelectorAll('a[href]').forEach((a) => addUrl((a as HTMLAnchorElement).getAttribute('href')));
-    document.querySelectorAll('script[src]').forEach((s) => addUrl((s as HTMLScriptElement).getAttribute('src')));
-    document
-      .querySelectorAll('link[rel="stylesheet"][href]')
-      .forEach((l) => addUrl((l as HTMLLinkElement).getAttribute('href')));
-    document.querySelectorAll('iframe[src]').forEach((f) => addUrl((f as HTMLIFrameElement).getAttribute('src')));
+    document.querySelectorAll('a[href]').forEach((el) => {
+      if (el instanceof HTMLAnchorElement) addUrl(el.getAttribute('href'));
+    });
+
+    document.querySelectorAll('script[src]').forEach((el) => {
+      if (el instanceof HTMLScriptElement) addUrl(el.getAttribute('src'));
+    });
+
+    document.querySelectorAll('link[rel="stylesheet"][href]').forEach((el) => {
+      if (el instanceof HTMLLinkElement) addUrl(el.getAttribute('href'));
+    });
+
+    document.querySelectorAll('iframe[src]').forEach((el) => {
+      if (el instanceof HTMLIFrameElement) addUrl(el.getAttribute('src'));
+    });
 
     return Array.from(domains).sort();
   }, baseDomain);
 }
 
 async function extractAssetsSummary(page: PlaywrightCrawlingContext['page']): Promise<IAssetsSummary> {
-  return page.evaluate(() => {
+  return page.evaluate<IAssetsSummary>(() => {
     const scripts = Array.from(document.querySelectorAll('script'));
     const stylesheets = Array.from(document.querySelectorAll('link[rel="stylesheet"]'));
     const styleTags = Array.from(document.querySelectorAll('style'));
     const imgs = Array.from(document.images || []);
 
-    const scriptsCount = scripts.filter((s) => (s as HTMLScriptElement).src).length;
+    const scriptsCount = scripts.filter((s) => s instanceof HTMLScriptElement && Boolean(s.src)).length;
     const stylesCount = stylesheets.length;
 
     const inlineJsBytes = scripts
-      .filter((s) => !(s as HTMLScriptElement).src)
-      .reduce((sum, s) => sum + ((s.textContent || '').length || 0), 0);
+      .filter((s) => s instanceof HTMLScriptElement && !s.src)
+      .reduce((sum, s) => sum + (s.textContent ? s.textContent.length : 0), 0);
 
-    const inlineCssBytes = styleTags.reduce((sum, s) => sum + ((s.textContent || '').length || 0), 0);
+    const inlineCssBytes = styleTags.reduce((sum, s) => sum + (s.textContent ? s.textContent.length : 0), 0);
 
     const imagesCount = imgs.length;
-    const lazyImagesCount = imgs.filter((img) => ((img.getAttribute('loading') || '').toLowerCase() === 'lazy')).length;
+    const lazyImagesCount = imgs.filter((img) => (img.getAttribute('loading') || '').toLowerCase() === 'lazy').length;
 
     return { scriptsCount, stylesCount, inlineJsBytes, inlineCssBytes, imagesCount, lazyImagesCount };
   });
 }
 
 async function takeLayoutSnapshot(page: PlaywrightCrawlingContext['page']): Promise<ILayoutSnapshot> {
-  return page.evaluate(() => {
+  return page.evaluate<ILayoutSnapshot>(() => {
+    type RectObj = { x: number; y: number; w: number; h: number };
+    type LayoutEl = {
+      tag: string;
+      id: string | null;
+      className: string | null;
+      rect: RectObj;
+      position: string | null;
+      zIndex: number | null;
+      bottomOffset: number;
+      topOffset: number;
+      text: string | null;
+      href?: string | null;
+      pointerEvents?: string | null;
+      opacity?: string | null;
+    };
+
     const vw = window.innerWidth || 0;
     const vh = window.innerHeight || 0;
 
-    function rectToObj(r: DOMRect) {
+    function rectToObj(r: DOMRect): RectObj {
       return { x: r.x, y: r.y, w: r.width, h: r.height };
     }
 
-    function isVisible(el: Element) {
+    function isVisible(el: Element): boolean {
       const cs = window.getComputedStyle(el);
       if (cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0') return false;
-      const r = (el as HTMLElement).getBoundingClientRect();
+      const r = (el instanceof HTMLElement ? el : null)?.getBoundingClientRect();
+      if (!r) return false;
       return r.width >= 1 && r.height >= 1;
     }
 
-    function inViewport(r: DOMRect) {
+    function inViewport(r: DOMRect): boolean {
       return r.bottom > 0 && r.right > 0 && r.top < vh && r.left < vw;
     }
 
-    function getText(el: Element) {
-      const t = ((el as HTMLElement).innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+    function getText(el: Element): string | null {
+      const raw = (el instanceof HTMLElement ? el.innerText : el.textContent) || '';
+      const t = raw.replace(/\s+/g, ' ').trim();
       return t ? t.slice(0, 160) : null;
     }
 
-    const fixedStickyElements: any[] = [];
-    const clickableCandidates: any[] = [];
+    const fixedStickyElements: LayoutEl[] = [];
+    const clickableCandidates: LayoutEl[] = [];
 
     const all = Array.from(document.querySelectorAll('body *'));
     for (const el of all) {
       if (!isVisible(el)) continue;
 
       const cs = window.getComputedStyle(el);
-      const r = (el as HTMLElement).getBoundingClientRect();
+      const r = el instanceof HTMLElement ? el.getBoundingClientRect() : null;
+      if (!r) continue;
       if (!inViewport(r)) continue;
 
       const zIndexRaw = cs.zIndex;
-      const zIndex = Number.isFinite(Number(zIndexRaw)) ? Number(zIndexRaw) : null;
+      const zIndexNum = Number(zIndexRaw);
+      const zIndex = Number.isFinite(zIndexNum) ? zIndexNum : null;
 
       if (cs.position === 'fixed' || cs.position === 'sticky') {
         fixedStickyElements.push({
           tag: el.tagName.toLowerCase(),
-          id: (el as HTMLElement).id || null,
-          className: typeof (el as any).className === 'string' ? (el as any).className.slice(0, 200) : null,
+          id: el instanceof HTMLElement && el.id ? el.id : null,
+          className: el instanceof HTMLElement && typeof el.className === 'string' ? el.className.slice(0, 200) : null,
           position: cs.position,
           zIndex,
           rect: rectToObj(r),
@@ -230,22 +290,24 @@ async function takeLayoutSnapshot(page: PlaywrightCrawlingContext['page']): Prom
       }
 
       const tag = el.tagName.toLowerCase();
+      const role = el instanceof HTMLElement ? el.getAttribute('role') : null;
+
       const isClickable =
         tag === 'a' ||
         tag === 'button' ||
-        (el as HTMLElement).getAttribute('role') === 'button' ||
-        typeof (el as any).onclick === 'function' ||
-        (el as HTMLElement).hasAttribute('onclick');
+        role === 'button' ||
+        (el instanceof HTMLElement && typeof (el.onclick || null) === 'function') ||
+        (el instanceof HTMLElement && el.hasAttribute('onclick'));
 
       if (isClickable) {
         const minW = 120;
         const minH = 32;
         if (r.width >= minW && r.height >= minH) {
-          const href = tag === 'a' ? ((el as HTMLElement).getAttribute('href') || null) : null;
+          const href = el instanceof HTMLAnchorElement ? el.getAttribute('href') : null;
           clickableCandidates.push({
             tag,
-            id: (el as HTMLElement).id || null,
-            className: typeof (el as any).className === 'string' ? (el as any).className.slice(0, 200) : null,
+            id: el instanceof HTMLElement && el.id ? el.id : null,
+            className: el instanceof HTMLElement && typeof el.className === 'string' ? el.className.slice(0, 200) : null,
             rect: rectToObj(r),
             position: cs.position || null,
             zIndex,
@@ -312,50 +374,231 @@ async function attemptMinimalConsentAction(page: PlaywrightCrawlingContext['page
 
     return result;
   } catch (e) {
-    result.consentError = String((e as Error)?.message || e);
+    result.consentError = String((e instanceof Error ? e.message : e) || e);
     return result;
   }
 }
 
-function buildErrorId(): string {
-  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+type IFetchBody = {
+  requestUrl: string;
+  finalUrl: string | null;
+  status: number | null;
+  contentType: string | null;
+  body: Buffer | null;
+  isBinary: boolean;
+  truncated: boolean;
+  error: string | null;
+};
+
+async function fetchWithTimeout(url: string, timeoutMs: number, maxBytes: number): Promise<IFetchBody> {
+  const controller = new AbortController();
+  const started = Date.now();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const resp = await fetch(url, {
+      redirect: 'follow',
+      signal: controller.signal,
+      headers: {
+        'user-agent': 'apify-hotel-site-snapshot/1.0',
+        accept: '*/*',
+      },
+    });
+
+    const status = resp.status;
+    const contentType = resp.headers.get('content-type');
+    const finalUrl = resp.url || null;
+
+    const ab = await resp.arrayBuffer();
+    const buf = Buffer.from(ab);
+
+    const truncated = buf.length > maxBytes;
+    const body = truncated ? buf.subarray(0, maxBytes) : buf;
+
+    const ct = (contentType || '').toLowerCase();
+    const isBinary =
+      url.toLowerCase().endsWith('.gz') ||
+      ct.includes('application/gzip') ||
+      ct.includes('application/x-gzip') ||
+      ct.includes('octet-stream');
+
+    return {
+      requestUrl: url,
+      finalUrl,
+      status,
+      contentType,
+      body,
+      isBinary,
+      truncated,
+      error: null,
+    };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    const elapsed = Date.now() - started;
+    const err = elapsed >= timeoutMs ? 'timeout' : msg;
+    return {
+      requestUrl: url,
+      finalUrl: null,
+      status: null,
+      contentType: null,
+      body: null,
+      isBinary: false,
+      truncated: false,
+      error: err,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
-function truncate(s: string, max: number): string {
-  const str = String(s || '');
-  return str.length > max ? str.slice(0, max) : str;
+function parseSitemapFromRobots(robotsText: string, baseUrl: string): string | null {
+  const lines = robotsText.split(/\r?\n/);
+  for (const line of lines) {
+    const m = line.match(/^\s*sitemap\s*:\s*(.+)\s*$/i);
+    if (!m) continue;
+    const raw = (m[1] || '').trim();
+    if (!raw) continue;
+    try {
+      return new URL(raw, baseUrl).toString();
+    } catch {
+      // ignore
+    }
+  }
+  return null;
 }
 
-function kvSafeKey(key: string): string {
-  // Apify KV key must be a single "filename-like" token (no slashes).
-  // Keep it deterministic and readable.
-  return key
-    .replace(/[\/\\]+/g, '_')
-    .replace(/[^a-zA-Z0-9!\-_.()']/g, '_')
-    .slice(0, 240);
+async function saveToKv(
+  kvStore: Awaited<ReturnType<typeof Actor.openKeyValueStore>>,
+  key: string,
+  value: string | Buffer,
+  contentType: string,
+): Promise<string | null> {
+  const safeKey = kvSafeKey(key);
+  try {
+    await kvStore.setValue(safeKey, value, { contentType });
+    const publicUrl = kvStore.getPublicUrl(safeKey);
+    if (typeof publicUrl === 'string' && publicUrl.length > 0) return publicUrl;
+    return `KV:${safeKey}`;
+  } catch {
+    return null;
+  }
+}
+
+async function collectExtraFiles(
+  kvStore: Awaited<ReturnType<typeof Actor.openKeyValueStore>>,
+  domain: string,
+  runId: string | null,
+  timeoutMs: number,
+): Promise<IExtraFilesBlock> {
+  const hosts = buildHostCandidates(domain);
+  const baseUrl = ensureHttps(domain) || `https://${normalizeDomain(domain)}`;
+  const baseKey = runId ? `files_${runId}` : 'files';
+
+  const robotsCandidates = buildUrlCandidates(hosts, '/robots.txt');
+  const sitemapCandidates = buildUrlCandidates(hosts, '/sitemap.xml');
+  const llmsCandidates = [
+    ...buildUrlCandidates(hosts, '/llms.txt'),
+    ...buildUrlCandidates(hosts, '/.well-known/llms.txt'),
+  ];
+
+  async function firstOk(candidates: string[], maxBytes: number): Promise<IFetchBody> {
+    let last: IFetchBody | null = null;
+    for (const u of candidates) {
+      const r = await fetchWithTimeout(u, timeoutMs, maxBytes);
+      last = r;
+      if (r.status !== null && r.status >= 200 && r.status <= 399) return r;
+    }
+    return last || {
+      requestUrl: candidates[0] || '',
+      finalUrl: null,
+      status: null,
+      contentType: null,
+      body: null,
+      isBinary: false,
+      truncated: false,
+      error: 'no-candidates',
+    };
+  }
+
+  function toRecord(type: EXTRA_FILE_TYPE, fetchedAt: string, fetched: IFetchBody, storageRef: string | null): IExtraFileRecord {
+    const bytes = fetched.body ? fetched.body.length : null;
+    return {
+      type,
+      requestUrl: fetched.requestUrl,
+      finalUrl: fetched.finalUrl,
+      status: fetched.status,
+      contentType: fetched.contentType,
+      storageRef,
+      bytes,
+      isBinary: fetched.isBinary,
+      truncated: fetched.truncated,
+      fetchedAt,
+      error: fetched.error,
+    };
+  }
+
+  const fetchedAt = nowIso();
+
+  const robots = await firstOk(robotsCandidates, 256_000);
+  let robotsRef: string | null = null;
+  let robotsText = '';
+
+  if (robots.body) {
+    const ct = robots.contentType || 'text/plain; charset=utf-8';
+    if (!robots.isBinary) robotsText = robots.body.toString('utf-8');
+    robotsRef = await saveToKv(kvStore, `${baseKey}_robots.txt`, robots.isBinary ? robots.body : robotsText, ct);
+  }
+
+  let sitemapUrlFromRobots: string | null = null;
+  if (robotsText) sitemapUrlFromRobots = parseSitemapFromRobots(robotsText, baseUrl);
+
+  const sitemap = sitemapUrlFromRobots
+    ? await firstOk([sitemapUrlFromRobots], 2_000_000)
+    : await firstOk(sitemapCandidates, 2_000_000);
+
+  let sitemapRef: string | null = null;
+  if (sitemap.body) {
+    const ct = sitemap.contentType || 'application/xml; charset=utf-8';
+    const value = sitemap.isBinary ? sitemap.body : sitemap.body.toString('utf-8');
+    sitemapRef = await saveToKv(kvStore, `${baseKey}_sitemap.xml`, typeof value === 'string' ? value : value, ct);
+  }
+
+  const llms = await firstOk(llmsCandidates, 256_000);
+  let llmsRef: string | null = null;
+  if (llms.body) {
+    const ct = llms.contentType || 'text/plain; charset=utf-8';
+    const value = llms.isBinary ? llms.body : llms.body.toString('utf-8');
+    llmsRef = await saveToKv(kvStore, `${baseKey}_llms.txt`, typeof value === 'string' ? value : value, ct);
+  }
+
+  return {
+    robotsTxt: robots.requestUrl ? toRecord(EXTRA_FILE_TYPE.ROBOTS_TXT, fetchedAt, robots, robotsRef) : null,
+    sitemapXml: sitemap.requestUrl ? toRecord(EXTRA_FILE_TYPE.SITEMAP_XML, fetchedAt, sitemap, sitemapRef) : null,
+    llmsTxt: llms.requestUrl ? toRecord(EXTRA_FILE_TYPE.LLMS_TXT, fetchedAt, llms, llmsRef) : null,
+  };
 }
 
 await Actor.init();
 
-const kvStoreId = Actor.getEnv().defaultKeyValueStoreId || null;
-
-const inputRaw = (await Actor.getInput<IActorInput>()) || ({} as IActorInput);
+const inputRaw = (await Actor.getInput<IActorInput>()) || ({} as never);
 
 const hotelId = String(inputRaw.hotelId || '').trim();
 const domain = normalizeDomain(inputRaw.domain || '');
 
-const maxPages = Number.isFinite(Number(inputRaw.maxPages)) ? Number(inputRaw.maxPages) : 4;
-const maxDepth = Number.isFinite(Number(inputRaw.maxDepth)) ? Number(inputRaw.maxDepth) : 1;
+const maxPages = Number.isFinite(Number(inputRaw.maxPages)) ? Number(inputRaw.maxPages) : 1;
+const maxDepth = Number.isFinite(Number(inputRaw.maxDepth)) ? Number(inputRaw.maxDepth) : 0;
 
 const collectHtml = inputRaw.collectHtml !== false;
 const collectDesktop = inputRaw.collectDesktop === true;
 const consentClickStrategy = inputRaw.consentClickStrategy || 'minimal';
+const collectFiles = inputRaw.collectFiles !== false;
 
-const viewport: IViewport = inputRaw.mobileViewport?.width && inputRaw.mobileViewport?.height
-  ? { width: Number(inputRaw.mobileViewport.width), height: Number(inputRaw.mobileViewport.height) }
-  : { width: 390, height: 844 };
+const viewport: IViewport =
+  inputRaw.mobileViewport && Number.isFinite(Number(inputRaw.mobileViewport.width)) && Number.isFinite(Number(inputRaw.mobileViewport.height))
+    ? { width: Number(inputRaw.mobileViewport.width), height: Number(inputRaw.mobileViewport.height) }
+    : { width: 390, height: 844 };
 
-const timeoutMsPerPage = Number.isFinite(Number(inputRaw.timeoutMsPerPage)) ? Number(inputRaw.timeoutMsPerPage) : 60000;
+const timeoutMsPerPage = Number.isFinite(Number(inputRaw.timeoutMsPerPage)) ? Number(inputRaw.timeoutMsPerPage) : 60_000;
 
 const seedUrlsInput = Array.isArray(inputRaw.seedUrls) ? inputRaw.seedUrls : [];
 const seedUrls = seedUrlsInput.length
@@ -373,11 +616,6 @@ const pages: IPageRecord[] = [];
 const errors: IActorError[] = [];
 const redirectChains: IRedirectChainItem[] = [];
 
-function kvRecordUrlOrRef(key: string): string {
-  if (!kvStoreId) return `KV:${key}`;
-  return `https://api.apify.com/v2/key-value-stores/${kvStoreId}/records/${encodeURIComponent(key)}?attachment=true`;
-}
-
 function pushError(e: Omit<IActorError, 'id' | 'createdAt'>): void {
   errors.push({
     id: buildErrorId(),
@@ -386,6 +624,12 @@ function pushError(e: Omit<IActorError, 'id' | 'createdAt'>): void {
   });
 }
 
+const kvStore = await Actor.openKeyValueStore();
+
+const files: IExtraFilesBlock = collectFiles
+  ? await collectExtraFiles(kvStore, domain, runId, Math.max(5000, Math.min(20_000, timeoutMsPerPage)))
+  : { robotsTxt: null, sitemapXml: null, llmsTxt: null };
+
 const requestQueue = await RequestQueue.open();
 
 for (const url of seedUrls) {
@@ -393,7 +637,7 @@ for (const url of seedUrls) {
   await requestQueue.addRequest({
     url: u,
     uniqueKey: u,
-    userData: { depth: 0, referrerUrl: null as string | null, isHome: true },
+    userData: { depth: 0, referrerUrl: null, isHome: true },
   });
 }
 
@@ -402,19 +646,37 @@ async function saveScreenshot(key: string, buf: Buffer | null): Promise<string |
   const safeKey = kvSafeKey(key);
 
   try {
-    await Actor.setValue(safeKey, buf, { contentType: 'image/png' });
-    return kvRecordUrlOrRef(safeKey);
+    await kvStore.setValue(safeKey, buf, { contentType: 'image/png' });
+    const publicUrl = kvStore.getPublicUrl(safeKey);
+    if (typeof publicUrl === 'string' && publicUrl.length > 0) return publicUrl;
+    return `KV:${safeKey}`;
   } catch (e) {
     pushError({
       stage: EErrorStage.STORAGE,
       code: EErrorCode.STORAGE_WRITE_FAILED,
-      message: truncate(String((e as Error)?.message || e), 500),
+      message: truncate(String(e instanceof Error ? e.message : e), 500),
       url: null,
       httpStatus: null,
       evidence: { bodySnippet: null },
     });
     return null;
   }
+}
+
+type IUserData = { depth: number; referrerUrl: string | null; isHome: boolean };
+
+function readUserData(v: unknown): IUserData {
+  if (!isRecord(v)) return { depth: 0, referrerUrl: null, isHome: false };
+
+  const depthRaw = v.depth;
+  const refRaw = v.referrerUrl;
+  const homeRaw = v.isHome;
+
+  const depth = typeof depthRaw === 'number' && Number.isFinite(depthRaw) ? depthRaw : 0;
+  const referrerUrl = typeof refRaw === 'string' ? refRaw : null;
+  const isHome = homeRaw === true;
+
+  return { depth, referrerUrl, isHome };
 }
 
 const crawler = new PlaywrightCrawler({
@@ -432,7 +694,7 @@ const crawler = new PlaywrightCrawler({
       await page.route('**/*', (route) => {
         const r = route.request();
         const rt = r.resourceType();
-        if (rt === 'font') return route.abort();
+        if (rt === 'font' || rt === 'media') return route.abort();
         return route.continue();
       });
 
@@ -441,7 +703,9 @@ const crawler = new PlaywrightCrawler({
           const status = resp.status();
           if (status >= 300 && status <= 399) {
             const from = resp.url();
-            const loc = resp.headers()?.location || null;
+            const headers = resp.headers();
+            const loc = headers['location'] || null;
+
             redirectChains.push({
               requestUrl: request.url,
               from,
@@ -456,11 +720,11 @@ const crawler = new PlaywrightCrawler({
       });
     },
   ],
-  requestHandler: async ({ page, request, response, enqueueLinks: enqueueLinksFn }: PlaywrightCrawlingContext) => {
-    const ud = (request.userData || {}) as { depth?: number; referrerUrl?: string | null; isHome?: boolean };
-    const depth = Number.isFinite(Number(ud.depth)) ? Number(ud.depth) : 0;
-    const referrerUrl = ud.referrerUrl ?? null;
-    const isHome = ud.isHome === true;
+  requestHandler: async ({ page, request, response, enqueueLinks }: PlaywrightCrawlingContext) => {
+    const ud = readUserData(request.userData);
+    const depth = ud.depth;
+    const referrerUrl = ud.referrerUrl;
+    const isHome = ud.isHome;
 
     const t0 = Date.now();
 
@@ -470,8 +734,12 @@ const crawler = new PlaywrightCrawler({
 
     try {
       finalUrl = page.url();
-      status = response?.status?.() ?? null;
-      contentType = (response?.headers?.()['content-type'] as string | undefined) ?? null;
+      status = response ? response.status() : null;
+
+      if (response) {
+        const headers = response.headers();
+        contentType = headers['content-type'] || null;
+      }
 
       const domMeta = await extractDomMeta(page).catch((): IDomMeta | null => null);
       const outboundDomains = await extractOutboundDomains(page, domain).catch(() => []);
@@ -510,8 +778,9 @@ const crawler = new PlaywrightCrawler({
           afterScroll: null,
         };
 
-        const shotA = await page.screenshot({ fullPage: false }).catch(() => null);
-        const shotARef = await saveScreenshot(`${baseKey}/home-initial.png`, shotA ? Buffer.from(shotA) : null);
+        const shotABytes = await page.screenshot({ fullPage: false }).catch(() => null);
+        const shotA = shotABytes ? Buffer.from(shotABytes) : null;
+        const shotARef = await saveScreenshot(`${baseKey}/home-initial.png`, shotA);
         const layoutA = await takeLayoutSnapshot(page).catch((): ILayoutSnapshot | null => null);
 
         item.mobile.initial = { screenshotRef: shotARef, layoutSnapshot: layoutA };
@@ -522,8 +791,9 @@ const crawler = new PlaywrightCrawler({
 
           await sleep(350);
 
-          const shotB = await page.screenshot({ fullPage: false }).catch(() => null);
-          const shotBRef = await saveScreenshot(`${baseKey}/home-after-consent.png`, shotB ? Buffer.from(shotB) : null);
+          const shotBBytes = await page.screenshot({ fullPage: false }).catch(() => null);
+          const shotB = shotBBytes ? Buffer.from(shotBBytes) : null;
+          const shotBRef = await saveScreenshot(`${baseKey}/home-after-consent.png`, shotB);
           const layoutB = await takeLayoutSnapshot(page).catch((): ILayoutSnapshot | null => null);
 
           item.mobile.afterConsent = { screenshotRef: shotBRef, layoutSnapshot: layoutB };
@@ -532,8 +802,9 @@ const crawler = new PlaywrightCrawler({
         await page.evaluate(() => window.scrollTo(0, 550)).catch(() => null);
         await sleep(500);
 
-        const shotC = await page.screenshot({ fullPage: false }).catch(() => null);
-        const shotCRef = await saveScreenshot(`${baseKey}/home-after-scroll.png`, shotC ? Buffer.from(shotC) : null);
+        const shotCBytes = await page.screenshot({ fullPage: false }).catch(() => null);
+        const shotC = shotCBytes ? Buffer.from(shotCBytes) : null;
+        const shotCRef = await saveScreenshot(`${baseKey}/home-after-scroll.png`, shotC);
         const layoutC = await takeLayoutSnapshot(page).catch((): ILayoutSnapshot | null => null);
 
         item.mobile.afterScroll = { scrollY: 550, screenshotRef: shotCRef, layoutSnapshot: layoutC };
@@ -544,8 +815,9 @@ const crawler = new PlaywrightCrawler({
           await page.evaluate(() => window.scrollTo(0, 0)).catch(() => null);
           await sleep(250);
 
-          const deskShot = await page.screenshot({ fullPage: false }).catch(() => null);
-          const deskRef = await saveScreenshot(`${baseKey}/home-desktop.png`, deskShot ? Buffer.from(deskShot) : null);
+          const deskBytes = await page.screenshot({ fullPage: false }).catch(() => null);
+          const deskShot = deskBytes ? Buffer.from(deskBytes) : null;
+          const deskRef = await saveScreenshot(`${baseKey}/home-desktop.png`, deskShot);
 
           item.desktop = { viewport: desktopViewport, screenshotRef: deskRef };
 
@@ -556,45 +828,34 @@ const crawler = new PlaywrightCrawler({
       pages.push(item);
 
       if (depth < maxDepth) {
-        try {
-          await enqueueLinksFn({
-            selector: 'a[href]',
-            strategy: 'same-domain',
-            transformRequestFunction: (req) => {
-              const u = canonicalize(req.url);
-              if (!u) return null;
-              if (!isInternalUrl(u, domain)) return null;
+        await enqueueLinks({
+          selector: 'a[href]',
+          strategy: 'same-domain',
+          transformRequestFunction: (req) => {
+            const u = canonicalize(req.url);
+            if (!u) return null;
+            if (!isInternalUrl(u, domain)) return null;
 
-              const nextDepth = depth + 1;
-              if (nextDepth > maxDepth) return null;
+            const nextDepth = depth + 1;
+            if (nextDepth > maxDepth) return null;
 
-              const lu = u.toLowerCase();
-              if (lu.includes('logout') || lu.includes('wp-admin') || lu.includes('cart')) return null;
+            const lu = u.toLowerCase();
+            if (lu.includes('logout') || lu.includes('wp-admin') || lu.includes('cart')) return null;
 
-              return {
-                url: u,
-                uniqueKey: u,
-                userData: {
-                  depth: nextDepth,
-                  referrerUrl: finalUrl || request.url,
-                  isHome: false,
-                },
-              };
-            },
-          });
-        } catch (e) {
-          pushError({
-            stage: EErrorStage.ENQUEUE,
-            code: EErrorCode.UNKNOWN,
-            message: truncate(String((e as Error)?.message || e), 500),
-            url: request.url,
-            httpStatus: status,
-            evidence: { finalUrl, contentType },
-          });
-        }
+            return {
+              url: u,
+              uniqueKey: u,
+              userData: {
+                depth: nextDepth,
+                referrerUrl: finalUrl || request.url,
+                isHome: false,
+              },
+            };
+          },
+        });
       }
     } catch (e) {
-      const msg = String((e as Error)?.message || e);
+      const msg = String(e instanceof Error ? e.message : e);
 
       let bodySnippet = '';
       try {
@@ -623,7 +884,7 @@ const crawler = new PlaywrightCrawler({
     }
   },
   failedRequestHandler: async ({ request, error }) => {
-    const msg = String((error as Error)?.message || error);
+    const msg = String(error instanceof Error ? error.message : error);
     const code = detectErrorCode(msg, null, false, '');
 
     pushError({
@@ -658,6 +919,7 @@ const output: IActorOutput = {
       collectDesktop,
       consentClickStrategy,
       timeoutMsPerPage,
+      collectFiles,
     },
   },
   snapshot: {
@@ -668,9 +930,10 @@ const output: IActorOutput = {
     stats: {
       pagesVisited: pages.length,
       errorsCount: errors.length,
-      totalHtmlBytes: pages.reduce((sum, p) => sum + ((p.contentStorage.html || '').length || 0), 0),
+      totalHtmlBytes: pages.reduce((sum, p) => sum + (p.contentStorage.html ? p.contentStorage.html.length : 0), 0),
     },
   },
+  files,
   pages,
   errors,
   debug: { redirectChains },

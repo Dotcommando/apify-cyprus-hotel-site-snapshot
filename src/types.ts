@@ -38,6 +38,12 @@ export enum EErrorCode {
   UNKNOWN = 'UNKNOWN',
 }
 
+export enum EXTRA_FILE_TYPE {
+  ROBOTS_TXT = 'robots.txt',
+  SITEMAP_XML = 'sitemap.xml',
+  LLMS_TXT = 'llms.txt',
+}
+
 export interface IActorInput {
   hotelId: string;
   domain: string;
@@ -49,6 +55,7 @@ export interface IActorInput {
   collectDesktop?: boolean;
   consentClickStrategy?: 'none' | 'minimal';
   timeoutMsPerPage?: number;
+  collectFiles?: boolean;
 }
 
 export interface IDomMeta {
@@ -181,9 +188,30 @@ export interface ISnapshot {
   stats: ISnapshotStats;
 }
 
+export interface IExtraFileRecord {
+  type: EXTRA_FILE_TYPE;
+  requestUrl: string;
+  finalUrl: string | null;
+  status: number | null;
+  contentType: string | null;
+  storageRef: string | null;
+  bytes: number | null;
+  isBinary: boolean;
+  truncated: boolean;
+  fetchedAt: string;
+  error: string | null;
+}
+
+export interface IExtraFilesBlock {
+  robotsTxt: IExtraFileRecord | null;
+  sitemapXml: IExtraFileRecord | null;
+  llmsTxt: IExtraFileRecord | null;
+}
+
 export interface IActorOutput {
   runMeta: IRunMeta;
   snapshot: ISnapshot;
+  files: IExtraFilesBlock;
   pages: IPageRecord[];
   errors: IActorError[];
   debug: { redirectChains: IRedirectChainItem[] };
