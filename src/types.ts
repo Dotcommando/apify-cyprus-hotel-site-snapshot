@@ -1,219 +1,172 @@
+export enum SNAPSHOT_STATUS {
+  OK = 'ok',
+  FAILED = 'failed',
+}
+
+export enum CONSENT_ACTION_TYPE {
+  CLICK = 'click',
+  WAIT = 'wait',
+  PRESS_KEY = 'pressKey',
+  SCROLL = 'scroll',
+}
+
 export interface IViewport {
+  /** Viewport width in CSS pixels. */
   width: number;
+  /** Viewport height in CSS pixels. */
   height: number;
-}
-
-export enum ERunStatus {
-  SUCCESS = 'SUCCESS',
-  PARTIAL_SUCCESS = 'PARTIAL_SUCCESS',
-  FAILED = 'FAILED',
-}
-
-export enum EErrorStage {
-  SEED_RESOLVE = 'seed-resolve',
-  FETCH = 'fetch',
-  NAVIGATION = 'navigation',
-  RENDER = 'render',
-  PARSE = 'parse',
-  SCREENSHOT = 'screenshot',
-  ENQUEUE = 'enqueue',
-  STORAGE = 'storage',
-}
-
-export enum EErrorCode {
-  DNS_NOT_FOUND = 'DNS_NOT_FOUND',
-  TLS_ERROR = 'TLS_ERROR',
-  TOO_MANY_REDIRECTS = 'TOO_MANY_REDIRECTS',
-  HTTP_401_403 = 'HTTP_401_403',
-  HTTP_429 = 'HTTP_429',
-  HTTP_5XX = 'HTTP_5XX',
-  TIMEOUT = 'TIMEOUT',
-  NAVIGATION_FAILED = 'NAVIGATION_FAILED',
-  CAPTCHA_DETECTED = 'CAPTCHA_DETECTED',
-  ROBOTS_BLOCKED = 'ROBOTS_BLOCKED',
-  CONTENT_TOO_LARGE = 'CONTENT_TOO_LARGE',
-  UNSUPPORTED_CONTENT_TYPE = 'UNSUPPORTED_CONTENT_TYPE',
-  JS_CRASH = 'JS_CRASH',
-  STORAGE_WRITE_FAILED = 'STORAGE_WRITE_FAILED',
-  UNKNOWN = 'UNKNOWN',
-}
-
-export enum EXTRA_FILE_TYPE {
-  ROBOTS_TXT = 'robots.txt',
-  SITEMAP_XML = 'sitemap.xml',
-  LLMS_TXT = 'llms.txt',
-}
-
-export interface IActorInput {
-  hotelId: string;
-  domain: string;
-  seedUrls?: string[];
-  maxPages?: number;
-  maxDepth?: number;
-  collectHtml?: boolean;
-  mobileViewport?: IViewport;
-  collectDesktop?: boolean;
-  consentClickStrategy?: 'none' | 'minimal';
-  timeoutMsPerPage?: number;
-  collectFiles?: boolean;
-}
-
-export interface IDomMeta {
-  title: string | null;
-  lang: string | null;
-  canonical: string | null;
-  hreflang: Array<{ hreflang: string; href: string }>;
-}
-
-export interface IAssetsSummary {
-  scriptsCount: number;
-  stylesCount: number;
-  inlineJsBytes: number;
-  inlineCssBytes: number;
-  imagesCount: number;
-  lazyImagesCount: number;
-}
-
-export interface IRect {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-}
-
-export interface ILayoutElement {
-  tag: string;
-  id: string | null;
-  className: string | null;
-  rect: IRect;
-  position: string | null;
-  zIndex: number | null;
-  bottomOffset: number;
-  topOffset: number;
-  text: string | null;
-  href?: string | null;
-  pointerEvents?: string | null;
-  opacity?: string | null;
-}
-
-export interface ILayoutSnapshot {
-  viewport: IViewport;
-  fixedStickyElements: ILayoutElement[];
-  clickableCandidates: ILayoutElement[];
-}
-
-export interface IConsentLog {
-  consentAction: 'none' | 'clickedAccept' | 'clickedClose';
-  consentSelectorUsed: string | null;
-  consentError: string | null;
-}
-
-export interface IHomeMobileState {
-  screenshotRef: string | null;
-  layoutSnapshot: ILayoutSnapshot | null;
-}
-
-export interface IHomeMobileBlock {
-  viewport: IViewport;
-  consent: IConsentLog | null;
-  initial: IHomeMobileState | null;
-  afterConsent: IHomeMobileState | null;
-  afterScroll: (IHomeMobileState & { scrollY: number }) | null;
-}
-
-export interface IPageRecord {
-  hotelId: string;
-  domain: string;
-  url: string;
-  finalUrl: string | null;
-  depth: number | null;
-  referrerUrl: string | null;
-  status: number | null;
-  contentType: string | null;
-  fetchedAt: string;
-  timings: { totalMs: number };
-  domMeta: IDomMeta | null;
-  outboundDomains: string[];
-  assetsSummary: IAssetsSummary | null;
-  contentStorage: { html: string | null };
-  mobile?: IHomeMobileBlock;
-  desktop?: { viewport: IViewport; screenshotRef: string | null };
+  /** Device pixel ratio (DPR). */
+  deviceScaleFactor: number;
+  /** Whether the viewport is considered a mobile device. */
+  isMobile: boolean;
+  /** Whether to emulate touch input. */
+  hasTouch: boolean;
+  /** Whether the viewport is in landscape mode. */
+  isLandscape: boolean;
+  /** User-Agent string used for the page. */
+  userAgent: string;
 }
 
 export interface IRedirectChainItem {
-  requestUrl: string;
-  from: string;
-  location: string | null;
-  status: number;
-  at: string;
+  /** The requested URL at this hop. */
+  url: string;
+  /** HTTP status code for the hop, if known. */
+  status?: number;
+  /** Redirect target URL, if this hop redirected. */
+  location?: string;
+  /** Final resolved URL if this hop ended the chain. */
+  resolvedUrl?: string;
 }
 
-export interface IErrorEvidence {
-  finalUrl?: string | null;
-  contentType?: string | null;
-  bodySnippet?: string | null;
-  retries?: number;
-}
-
-export interface IActorError {
-  id: string;
-  stage: EErrorStage;
-  code: EErrorCode;
-  message: string;
-  url: string | null;
-  httpStatus: number | null;
-  evidence: IErrorEvidence;
-  createdAt: string;
-}
-
-export interface IRunMeta {
+export interface IHomeMobileSnapshot {
+  /** The homepage URL that was opened for the snapshot. */
+  url: string;
+  /** Final URL after redirects (if any). */
+  finalUrl?: string;
+  /** Mobile viewport used to render the page. */
+  viewport: IViewport;
+  /** When the snapshot process started (ISO string). */
   startedAt: string;
+  /** When the snapshot process finished (ISO string). */
   finishedAt: string;
-  actorVersion: string;
-  inputEcho: Record<string, unknown>;
-  runId: string | null;
+  /** HTTP status code of the main document response (if available). */
+  status?: number;
+  /** Redirect chain observed while opening the homepage. */
+  redirectChain: IRedirectChainItem[];
+  /** Whether a consent/banner interaction was attempted. */
+  consentAttempted: boolean;
+  /** Consent action log (attempts, clicks, waits, etc.). */
+  consentLog: IConsentLog[];
+  /** Raw HTML of the final homepage document. */
+  html: string;
+  /** Screenshot storage key (e.g., Apify Key-Value Store record key). */
+  screenshotKey: string;
+  /** Screenshot content type, usually "image/png". */
+  screenshotContentType: string;
+  /** Page title as reported by the browser. */
+  title?: string;
+  /** Detected <meta name="description"> content, if found. */
+  metaDescription?: string;
+  /** Any non-fatal notes captured during snapshot (timeouts, blocked resources, etc.). */
+  notes?: string[];
 }
 
-export interface ISnapshotStats {
-  pagesVisited: number;
-  errorsCount: number;
-  totalHtmlBytes: number;
+export interface IConsentLog {
+  /** When the action was executed (ISO string). */
+  at: string;
+  /** Action kind used to try to dismiss/accept a consent banner. */
+  type: CONSENT_ACTION_TYPE;
+  /** Human-readable description of what was attempted. */
+  label: string;
+  /** CSS selector used (for click actions), if any. */
+  selector?: string;
+  /** Text that was searched for / matched, if any. */
+  textMatch?: string;
+  /** How long we waited (ms) for waits/timeouts, if applicable. */
+  durationMs?: number;
+  /** Whether the action succeeded. */
+  ok: boolean;
+  /** Error message, if action failed. */
+  error?: string;
 }
 
-export interface ISnapshot {
+export interface ICyprusHotelSiteSnapshotInput {
+  /** MongoDB hotels._id as string. Used to join snapshot with your database. */
   hotelId: string;
+  /** Hotel website domain without protocol (example.com). */
   domain: string;
+  /** Optional list of starting URLs. If empty, https://<domain>/ will be used. */
   seedUrls: string[];
-  collectedAt: string;
-  stats: ISnapshotStats;
+  /** Maximum number of pages to crawl (including seed). */
+  maxPages: number;
+  /** Maximum crawl depth from seed URLs (0 = only seed). */
+  maxDepth: number;
+  /** Max requests per minute to keep load reasonable. */
+  maxRequestsPerMinute: number;
+  /** Navigation timeout in milliseconds for page loads. */
+  navigationTimeoutMs: number;
+  /** Request timeout in milliseconds for each HTTP fetch. */
+  requestTimeoutMs: number;
+  /** Whether to store raw HTML for crawled pages (not only home). */
+  storeHtml: boolean;
+  /** Whether to store response headers for crawled pages. */
+  storeHeaders: boolean;
+  /** Whether to store a mobile screenshot of the homepage. */
+  takeHomeMobileScreenshot: boolean;
+  /** If true, tries to click common cookie/consent banners on homepage. */
+  tryDismissConsent: boolean;
+  /** If provided, overrides default mobile viewport settings. */
+  homeMobileViewport?: Partial<IViewport>;
+  /** Optional tags to add into output for debugging/segmentation. */
+  tags?: string[];
+  /** If true, prints more detailed logs. */
+  debug?: boolean;
 }
 
-export interface IExtraFileRecord {
-  type: EXTRA_FILE_TYPE;
-  requestUrl: string;
-  finalUrl: string | null;
-  status: number | null;
-  contentType: string | null;
-  storageRef: string | null;
-  bytes: number | null;
-  isBinary: boolean;
-  truncated: boolean;
-  fetchedAt: string;
-  error: string | null;
+export interface ICrawledPageSnapshot {
+  /** Page URL as requested. */
+  url: string;
+  /** Final URL after redirects. */
+  finalUrl?: string;
+  /** HTTP status code, if available. */
+  status?: number;
+  /** Content-Type header of the main document, if known. */
+  contentType?: string;
+  /** Redirect chain observed while fetching the document. */
+  redirectChain: IRedirectChainItem[];
+  /** When the fetch started (ISO string). */
+  startedAt: string;
+  /** When the fetch finished (ISO string). */
+  finishedAt: string;
+  /** Raw HTML of the document (only if storeHtml=true and content is HTML). */
+  html?: string;
+  /** Response headers (only if storeHeaders=true). */
+  headers?: Record<string, string>;
+  /** Error message for failed requests, if any. */
+  error?: string;
 }
 
-export interface IExtraFilesBlock {
-  robotsTxt: IExtraFileRecord | null;
-  sitemapXml: IExtraFileRecord | null;
-  llmsTxt: IExtraFileRecord | null;
-}
-
-export interface IActorOutput {
-  runMeta: IRunMeta;
-  snapshot: ISnapshot;
-  files: IExtraFilesBlock;
-  pages: IPageRecord[];
-  errors: IActorError[];
-  debug: { redirectChains: IRedirectChainItem[] };
-  runStatus: ERunStatus;
+export interface ICyprusHotelSiteSnapshotOutput {
+  /** MongoDB hotels._id as string. */
+  hotelId: string;
+  /** Domain that was processed (as provided). */
+  domain: string;
+  /** Normalized homepage URL used as primary entry point. */
+  homeUrl: string;
+  /** Overall actor run status. */
+  status: SNAPSHOT_STATUS;
+  /** When the actor run started (ISO string). */
+  startedAt: string;
+  /** When the actor run finished (ISO string). */
+  finishedAt: string;
+  /** Snapshot of the homepage (HTML + optional mobile screenshot). */
+  home?: IHomeMobileSnapshot;
+  /** Crawled pages (may include home, depending on implementation). */
+  pages: ICrawledPageSnapshot[];
+  /** Non-fatal warnings collected during processing. */
+  warnings?: string[];
+  /** Fatal error if status=FAILED. */
+  error?: string;
+  /** Arbitrary debug/meta fields (versioning, timings, etc.). */
+  meta?: Record<string, unknown>;
 }

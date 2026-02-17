@@ -1,0 +1,12 @@
+export var SNAPSHOT_STATUS;
+(function (SNAPSHOT_STATUS) {
+    SNAPSHOT_STATUS["OK"] = "ok";
+    SNAPSHOT_STATUS["FAILED"] = "failed";
+})(SNAPSHOT_STATUS || (SNAPSHOT_STATUS = {}));
+export var CONSENT_ACTION_TYPE;
+(function (CONSENT_ACTION_TYPE) {
+    CONSENT_ACTION_TYPE["CLICK"] = "click";
+    CONSENT_ACTION_TYPE["WAIT"] = "wait";
+    CONSENT_ACTION_TYPE["PRESS_KEY"] = "pressKey";
+    CONSENT_ACTION_TYPE["SCROLL"] = "scroll";
+})(CONSENT_ACTION_TYPE || (CONSENT_ACTION_TYPE = {}));
