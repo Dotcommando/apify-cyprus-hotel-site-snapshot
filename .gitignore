@@ -62,3 +62,6 @@ lerna-debug.log*
 # LLM instructions
 **/gpt-*.md
 **/gpt-*.MD
+
+# Tests
+dist-tests
