@@ -21,69 +21,89 @@
       "description": "Optional list of starting URLs. If empty, https://<domain>/ will be used.",
       "type": "array",
       "editor": "stringList",
-      "items": {
-        "type": "string"
-      },
+      "items": { "type": "string" },
       "default": []
     },
     "maxPages": {
       "title": "Max pages",
-      "description": "Maximum number of pages to crawl (cost control).",
+      "description": "Maximum number of pages to crawl (including the home page).",
       "type": "integer",
-      "editor": "number",
-      "default": 10,
       "minimum": 1,
-      "maximum": 50
+      "maximum": 500,
+      "default": 25
     },
     "maxDepth": {
       "title": "Max depth",
-      "description": "Maximum link depth from home page.",
+      "description": "Maximum crawl depth starting from the seed URLs. Home page depth is 0.",
       "type": "integer",
-      "editor": "number",
-      "default": 2,
       "minimum": 0,
-      "maximum": 5
+      "maximum": 10,
+      "default": 2
     },
-    "collectHtml": {
-      "title": "Collect HTML",
-      "description": "Store raw HTML for each visited page.",
-      "type": "boolean",
-      "editor": "checkbox",
-      "default": true
+    "pageTimeoutSecs": {
+      "title": "Page timeout (seconds)",
+      "description": "Navigation + waiting timeout for a single page.",
+      "type": "integer",
+      "minimum": 5,
+      "maximum": 300,
+      "default": 60
     },
-    "mobileViewport": {
+    "waitAfterLoadMillis": {
+      "title": "Wait after load (ms)",
+      "description": "Extra wait after page load to allow scripts to finish rendering.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 30000,
+      "default": 1500
+    },
+    "blockResources": {
+      "title": "Block resource types",
+      "description": "Optional list of resource types to block to speed up crawling (image/media/font).",
+      "type": "array",
+      "editor": "stringList",
+      "items": { "type": "string" },
+      "default": ["image", "media", "font"]
+    },
+    "viewport": {
       "title": "Mobile viewport",
-      "description": "Viewport size for mobile rendering.",
+      "description": "Playwright viewport configuration.",
       "type": "object",
       "editor": "json",
       "default": {
         "width": 390,
-        "height": 844
+        "height": 844,
+        "deviceScaleFactor": 2,
+        "isMobile": true,
+        "hasTouch": true
       }
     },
-    "collectDesktop": {
-      "title": "Collect desktop screenshot",
-      "description": "Also capture desktop home screenshot (1366x768).",
+    "takeSecondScreenshot": {
+      "title": "Take second screenshot",
+      "description": "If enabled, the actor will take a second screenshot after scrolling down.",
       "type": "boolean",
-      "editor": "checkbox",
+      "default": true
+    },
+    "secondScreenshotScrollY": {
+      "title": "Second screenshot scroll Y",
+      "description": "Scroll position (in pixels) before taking the second screenshot.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 20000,
+      "default": 1400
+    },
+    "useProxy": {
+      "title": "Use Apify Proxy",
+      "description": "Enable Apify Proxy for requests.",
+      "type": "boolean",
       "default": false
     },
-    "consentClickStrategy": {
-      "title": "Consent click strategy",
-      "description": "How to handle cookie banner on home page.",
-      "type": "string",
-      "editor": "select",
-      "enum": ["none", "minimal"],
-      "default": "minimal"
-    },
-    "timeoutMsPerPage": {
-      "title": "Timeout per page (ms)",
-      "description": "Playwright navigation timeout per page.",
-      "type": "integer",
-      "editor": "number",
-      "default": 60000,
-      "minimum": 15000,
-      "maximum": 180000
+    "proxyGroups": {
+      "title": "Proxy groups",
+      "description": "Optional Apify proxy groups (e.g. RESIDENTIAL). Used only when useProxy=true.",
+      "type": "array",
+      "editor": "stringList",
+      "items": { "type": "string" },
+      "default": []
     }
   },
   "required": ["hotelId", "domain"]
