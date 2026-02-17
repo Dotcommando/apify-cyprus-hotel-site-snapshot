@@ -103,13 +103,8 @@ export async function waitForAboveTheFoldMedia(params: {
       .evaluate(() => {
         const videos = Array.from(document.querySelectorAll('video'));
         const imgs = Array.from(document.querySelectorAll('img'));
-
-        const videoOk = videos.every((v) => {
-          const video = v as HTMLVideoElement;
-          return video.readyState >= 2 || video.networkState === 3;
-        });
-
-        const imgOk = imgs.every((img) => (img as HTMLImageElement).complete);
+        const videoOk = videos.every((video) => video.readyState >= 2 || video.networkState === 3);
+        const imgOk = imgs.every((img) => img.complete);
 
         return { videoCount: videos.length, imgCount: imgs.length, videoOk, imgOk };
       })

@@ -56,6 +56,36 @@ function buildSiteFileUrl(homeUrl: string, path: string): string {
   return new URL(path, homeUrl).toString();
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isSpecialFileKind(value: unknown): value is SPECIAL_FILE_KIND {
+  return value === 'robots' || value === 'sitemap' || value === 'llms';
+}
+
+function parseRequestUserData(value: unknown): IRequestUserData {
+  if (!isRecord(value)) return { depth: 0, isSeed: false, isHome: false };
+
+  const depthRaw = value['depth'];
+  const isSeedRaw = value['isSeed'];
+  const isHomeRaw = value['isHome'];
+  const specialFileRaw = value['specialFile'];
+
+  const depth = typeof depthRaw === 'number' && Number.isFinite(depthRaw) ? depthRaw : Number(depthRaw ?? 0);
+  const isSeed = typeof isSeedRaw === 'boolean' ? isSeedRaw : Boolean(isSeedRaw);
+  const isHome = typeof isHomeRaw === 'boolean' ? isHomeRaw : Boolean(isHomeRaw);
+
+  const specialFile = isSpecialFileKind(specialFileRaw) ? specialFileRaw : undefined;
+
+  return {
+    depth: Number.isFinite(depth) ? depth : 0,
+    isSeed,
+    isHome,
+    ...(specialFile ? { specialFile } : {}),
+  };
+}
+
 function extractSitemapUrlsFromRobots(robotsText: string): string[] {
   const out: string[] = [];
   const lines = robotsText.split(/\r?\n/g);
@@ -72,6 +102,32 @@ function extractSitemapUrlsFromRobots(robotsText: string): string[] {
   }
 
   return uniqStrings(out);
+}
+
+function resolveSitemapUrls(params: { robotsText: string; baseUrl: string }): string[] {
+  const { robotsText, baseUrl } = params;
+
+  const rawUrls = extractSitemapUrlsFromRobots(robotsText);
+  const resolved: string[] = [];
+
+  for (const rawUrl of rawUrls) {
+    const trimmed = rawUrl.trim();
+    if (!trimmed) continue;
+
+    if (trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.startsWith('//')) {
+      resolved.push(ensureHttpsUrl(trimmed));
+      continue;
+    }
+
+    // Handle relative URLs from robots.txt, e.g. "Sitemap: /sitemap.xml"
+    try {
+      resolved.push(new URL(trimmed, baseUrl).toString());
+    } catch {
+      // ignore invalid url
+    }
+  }
+
+  return uniqStrings(resolved);
 }
 
 async function tryDismissConsent(page: Page): Promise<IConsentLog[]> {
@@ -245,22 +301,7 @@ await Actor.main(async () => {
     async requestHandler(ctx) {
       const { request, page, enqueueLinks } = ctx;
 
-      const userData = request.userData as unknown;
-
-      const requestUserData: IRequestUserData =
-        typeof userData === 'object' && userData !== null
-          ? {
-            depth: Number((userData as Record<string, unknown>)['depth'] ?? 0),
-            isSeed: Boolean((userData as Record<string, unknown>)['isSeed']),
-            isHome: Boolean((userData as Record<string, unknown>)['isHome']),
-            specialFile:
-              (userData as Record<string, unknown>)['specialFile'] === 'robots' ||
-              (userData as Record<string, unknown>)['specialFile'] === 'sitemap' ||
-              (userData as Record<string, unknown>)['specialFile'] === 'llms'
-                ? ((userData as Record<string, unknown>)['specialFile'] as SPECIAL_FILE_KIND)
-                : undefined,
-          }
-          : { depth: 0, isSeed: false, isHome: false };
+      const requestUserData = parseRequestUserData(request.userData);
 
       const depth = requestUserData.depth;
       const isHome = requestUserData.isHome;
@@ -301,33 +342,36 @@ await Actor.main(async () => {
               files = files ?? {};
               files.robotsTxt = bodyText;
 
-              const sitemapUrls = extractSitemapUrlsFromRobots(bodyText);
+              const sitemapUrls = resolveSitemapUrls({
+                robotsText: bodyText,
+                baseUrl: finalUrl ?? request.url,
+              });
 
               if (sitemapUrls.length) {
+                sitemapQueued = true;
                 for (const sitemapUrl of sitemapUrls) {
                   await requestQueue.addRequest({
-                    url: ensureHttpsUrl(sitemapUrl),
+                    url: sitemapUrl,
                     userData: { depth: 0, isSeed: true, isHome: false, specialFile: 'sitemap' },
                   });
                 }
-                sitemapQueued = true;
               } else if (!sitemapQueued) {
+                sitemapQueued = true;
                 await requestQueue.addRequest({
                   url: sitemapFallbackUrl,
                   userData: { depth: 0, isSeed: true, isHome: false, specialFile: 'sitemap' },
                 });
-                sitemapQueued = true;
               }
 
               return;
             }
 
             if (!sitemapQueued) {
+              sitemapQueued = true;
               await requestQueue.addRequest({
                 url: sitemapFallbackUrl,
                 userData: { depth: 0, isSeed: true, isHome: false, specialFile: 'sitemap' },
               });
-              sitemapQueued = true;
             }
 
             return;
@@ -369,13 +413,12 @@ await Actor.main(async () => {
         if (isHome && takeHomeMobileScreenshot) {
           const notes: string[] = [];
 
-          let title: string | undefined;
+          const title = await page.title().catch(() => undefined);
+
           let metaDescription: string | undefined;
-
-          title = await page.title().catch(() => undefined);
-
           try {
-            metaDescription = (await page.locator('meta[name="description"]').first().getAttribute('content')) ?? undefined;
+            metaDescription =
+              (await page.locator('meta[name="description"]').first().getAttribute('content')) ?? undefined;
           } catch {
             metaDescription = undefined;
           }
@@ -397,7 +440,9 @@ await Actor.main(async () => {
 
           if (tryDismissConsentFlag) consentLog = await tryDismissConsent(page);
 
-          await page.evaluate((scrollY) => window.scrollBy(0, scrollY), Math.floor(viewport.height * 0.9)).catch(() => undefined);
+          await page
+            .evaluate((scrollY: number) => window.scrollBy(0, scrollY), Math.floor(viewport.height * 0.9))
+            .catch(() => undefined);
           await page.waitForTimeout(800);
 
           const screenshotKey2Raw = `home-mobile-${hotelId}-2.png`;
