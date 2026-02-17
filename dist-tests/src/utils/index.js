@@ -50,9 +50,8 @@ export function isProbablyHtml(contentType) {
 }
 export function buildRedirectChainSimple(params) {
     const { url, finalUrl, status } = params;
-    if (!finalUrl || finalUrl === url) {
+    if (!finalUrl || finalUrl === url)
         return [{ url, status }];
-    }
     return [
         { url, status, resolvedUrl: finalUrl },
         { url: finalUrl, status, resolvedUrl: finalUrl },
@@ -62,4 +61,26 @@ export function clampInt(value, min, max) {
     if (!Number.isFinite(value))
         return min;
     return Math.min(max, Math.max(min, Math.trunc(value)));
+}
+export async function waitForAboveTheFoldMedia(params) {
+    const { page, timeoutMs, pollIntervalMs = 250 } = params;
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < timeoutMs) {
+        const res = await page
+            .evaluate(() => {
+            const videos = Array.from(document.querySelectorAll('video'));
+            const imgs = Array.from(document.querySelectorAll('img'));
+            const videoOk = videos.every((v) => {
+                const ve = v;
+                return ve.readyState >= 2 || ve.networkState === 3;
+            });
+            const imgOk = imgs.every((img) => img.complete);
+            return { videoCount: videos.length, imgCount: imgs.length, videoOk, imgOk };
+        })
+            .catch(() => null);
+        if (res && res.videoOk && res.imgOk)
+            return { ok: true };
+        await page.waitForTimeout(pollIntervalMs);
+    }
+    return { ok: false, reason: 'timeout' };
 }

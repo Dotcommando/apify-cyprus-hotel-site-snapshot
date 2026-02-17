@@ -56,11 +56,11 @@ const HOME_SNAPSHOT = {
         },
     ],
     html: MOCK_SITE_1_HTML,
-    screenshotKey: 'mock/site-1/home-mobile.png',
+    screenshotKey: `home-mobile-${MOCK_HOTEL_ID}-1.png`,
     screenshotContentType: 'image/png',
     title: 'Site One Resort & Spa — Luxury Seafront Hotel',
     metaDescription: 'A luxury seafront resort with private villas, fine dining, signature spa, and direct booking offers.',
-    notes: ['Some third-party resources were blocked in mock environment'],
+    notes: ['Some third-party resources were blocked in mock environment', `second-screenshot:home-mobile-${MOCK_HOTEL_ID}-2.png`],
 };
 export const MOCK_SITE_1_SNAPSHOT = {
     _id: MOCK_SNAPSHOT_ID,

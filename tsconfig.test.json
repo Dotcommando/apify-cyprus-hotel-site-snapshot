@@ -3,9 +3,8 @@
   "compilerOptions": {
     "rootDir": ".",
     "outDir": "dist-tests",
-    "noEmit": false,
-    "noEmitOnError": true
+    "noEmit": false
   },
   "include": ["src/**/*.ts", "tests/**/*.ts"],
-  "exclude": ["**/*.spec.ts"]
+  "exclude": ["dist/**", "node_modules/**"]
 }

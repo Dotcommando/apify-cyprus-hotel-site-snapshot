@@ -13,7 +13,7 @@ function makeRecorder() {
   return { fn, calls };
 }
 
-test('main.ts produces OUTPUT and stores screenshot (mocked apify/crawlee/playwright)', async () => {
+test('main.ts produces OUTPUT and stores screenshots (mocked apify/crawlee/playwright)', async () => {
   const { fn: setValue, calls: setValueCalls } = makeRecorder();
   const { fn: pushData, calls: pushDataCalls } = makeRecorder();
 
@@ -79,6 +79,7 @@ test('main.ts produces OUTPUT and stores screenshot (mocked apify/crawlee/playwr
 
     return {
       async setViewportSize() {},
+
       async goto(u: string) {
         currentUrl = u;
         return {
@@ -87,20 +88,45 @@ test('main.ts produces OUTPUT and stores screenshot (mocked apify/crawlee/playwr
           headers: () => ({ 'content-type': 'text/html; charset=utf-8' }),
         };
       },
+
       url() {
         return currentUrl;
       },
+
       async content() {
         return MOCK_SITE_1_HTML;
       },
+
       async title() {
         return 'Mock Site 1 — Luxury Resort';
       },
+
       locator() {
         return locatorObj;
       },
+
       async screenshot() {
         return Buffer.from([1, 2, 3, 4]);
+      },
+
+      async waitForTimeout() {
+        return undefined;
+      },
+
+      async evaluate(fnOrString: any) {
+        if (typeof fnOrString === 'function') {
+          try {
+            const res = fnOrString();
+            return res;
+          } catch {
+            return undefined;
+          }
+        }
+        return undefined;
+      },
+
+      mouse: {
+        async wheel() {},
       },
     };
   };
@@ -137,10 +163,6 @@ test('main.ts produces OUTPUT and stores screenshot (mocked apify/crawlee/playwr
 
   (globalThis as any).__apifyMock = { Actor, log };
   (globalThis as any).__crawleeMock = Crawlee;
-
-  const originalCreateRequire = (globalThis as any).__createRequireMock;
-
-  (globalThis as any).__createRequireMock = true;
 
   const nodeLoaderHack = `
     const Module = await import('node:module');
@@ -179,13 +201,26 @@ test('main.ts produces OUTPUT and stores screenshot (mocked apify/crawlee/playwr
     assert.equal(output.home.title, 'Mock Site 1 — Luxury Resort');
     assert.equal(output.home.metaDescription, 'Mock meta description for site-1');
 
-    const screenshotCall = setValueCalls.find((c) => typeof c[0] === 'string' && String(c[0]).startsWith('home-mobile-'));
-    assert.ok(screenshotCall, 'Actor.setValue(home-mobile-*.png, ...) not called');
+    assert.ok(typeof output.home.screenshotKey === 'string' && output.home.screenshotKey.endsWith('-1.png'));
+    const notes = Array.isArray(output.home.notes) ? output.home.notes : [];
+    assert.ok(notes.some((n: string) => typeof n === 'string' && n.startsWith('second-screenshot:')));
 
-    const [sKey, sBuf, sOpts] = screenshotCall;
-    assert.equal(typeof sKey, 'string');
-    assert.ok(Buffer.isBuffer(sBuf));
-    assert.deepEqual(sOpts, { contentType: 'image/png' });
+    const screenshotCalls = setValueCalls.filter(
+      (c) => typeof c[0] === 'string' && String(c[0]).startsWith('home-mobile-') && String(c[0]).endsWith('.png')
+    );
+
+    const shot1 = screenshotCalls.find((c) => String(c[0]).endsWith('-1.png'));
+    const shot2 = screenshotCalls.find((c) => String(c[0]).endsWith('-2.png'));
+
+    assert.ok(shot1, 'Actor.setValue(home-mobile-*-1.png, ...) not called');
+    assert.ok(shot2, 'Actor.setValue(home-mobile-*-2.png, ...) not called');
+
+    for (const call of [shot1, shot2] as any[]) {
+      const [sKey, sBuf, sOpts] = call;
+      assert.equal(typeof sKey, 'string');
+      assert.ok(Buffer.isBuffer(sBuf));
+      assert.deepEqual(sOpts, { contentType: 'image/png' });
+    }
 
     assert.ok(Array.isArray(output.pages));
     assert.ok(output.pages.length >= 1);
@@ -200,6 +235,5 @@ test('main.ts produces OUTPUT and stores screenshot (mocked apify/crawlee/playwr
   } finally {
     (globalThis as any).__apifyMock = prevApify;
     (globalThis as any).__crawleeMock = prevCrawlee;
-    (globalThis as any).__createRequireMock = originalCreateRequire;
   }
 });

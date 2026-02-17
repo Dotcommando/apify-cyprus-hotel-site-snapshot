@@ -1,3 +1,4 @@
+import type { Page } from 'playwright';
 import type { IRedirectChainItem } from '../types.js';
 
 export function nowIso(): string {
@@ -14,7 +15,6 @@ export function ensureHttpsUrl(input: string): string {
   if (!s) return s;
 
   if (s.startsWith('http://') || s.startsWith('https://')) return s;
-
   if (s.startsWith('//')) return `https:${s}`;
 
   return `https://${s}`;
@@ -51,16 +51,10 @@ export function isProbablyHtml(contentType: string | undefined): boolean {
   return contentType.toLowerCase().includes('text/html');
 }
 
-export function buildRedirectChainSimple(params: {
-  url: string;
-  finalUrl?: string;
-  status?: number;
-}): IRedirectChainItem[] {
+export function buildRedirectChainSimple(params: { url: string; finalUrl?: string; status?: number }): IRedirectChainItem[] {
   const { url, finalUrl, status } = params;
 
-  if (!finalUrl || finalUrl === url) {
-    return [{ url, status }];
-  }
+  if (!finalUrl || finalUrl === url) return [{ url, status }];
 
   return [
     { url, status, resolvedUrl: finalUrl },
@@ -71,4 +65,38 @@ export function buildRedirectChainSimple(params: {
 export function clampInt(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
   return Math.min(max, Math.max(min, Math.trunc(value)));
+}
+
+export async function waitForAboveTheFoldMedia(params: {
+  page: Page;
+  timeoutMs: number;
+  pollIntervalMs?: number;
+}): Promise<{ ok: boolean; reason?: string }> {
+  const { page, timeoutMs, pollIntervalMs = 250 } = params;
+
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const res = await page
+      .evaluate(() => {
+        const videos = Array.from(document.querySelectorAll('video'));
+        const imgs = Array.from(document.querySelectorAll('img'));
+
+        const videoOk = videos.every((v) => {
+          const ve = v as HTMLVideoElement;
+          return ve.readyState >= 2 || ve.networkState === 3;
+        });
+
+        const imgOk = imgs.every((img) => (img as HTMLImageElement).complete);
+
+        return { videoCount: videos.length, imgCount: imgs.length, videoOk, imgOk };
+      })
+      .catch(() => null);
+
+    if (res && res.videoOk && res.imgOk) return { ok: true };
+
+    await page.waitForTimeout(pollIntervalMs);
+  }
+
+  return { ok: false, reason: 'timeout' };
 }

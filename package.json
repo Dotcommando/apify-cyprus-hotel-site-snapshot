@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/main.js",
-    "test": "tsc -p tsconfig.test.json && tsc -p tsconfig.test-build.json && node --test dist-tests/tests/**/*.test.js"
+    "test": "tsc -p tsconfig.test.json && node --test dist-tests/tests/**/*.test.js"
   },
   "dependencies": {
     "apify": "3.5.3",
