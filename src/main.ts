@@ -192,7 +192,6 @@ await Actor.main(async () => {
 
   const robotsUrl = buildSiteFileUrl(homeUrl, '/robots.txt');
   const llmsUrl = buildSiteFileUrl(homeUrl, '/llms.txt');
-  const sitemapDefaultUrl = buildSiteFileUrl(homeUrl, '/sitemap.xml');
 
   const seedUrls = uniqStrings([...(input.seedUrls ?? []), homeUrl]).map(ensureHttpsUrl);
 
@@ -227,11 +226,6 @@ await Actor.main(async () => {
     userData: { depth: 0, isSeed: true, isHome: false, specialFile: 'llms' },
   });
 
-  await requestQueue.addRequest({
-    url: sitemapDefaultUrl,
-    userData: { depth: 0, isSeed: true, isHome: false, specialFile: 'sitemap' },
-  });
-
   const pages: ICrawledPageSnapshot[] = [];
   let homeSnapshot: IHomeMobileSnapshot | undefined;
   const warnings: string[] = [];
@@ -239,6 +233,8 @@ await Actor.main(async () => {
   let files: IHotelSiteSnapshotFiles | undefined;
 
   const storeId = String(Actor.getEnv().defaultKeyValueStoreId ?? '').trim();
+
+  let sitemapQueued = false;
 
   const crawler = new PlaywrightCrawler({
     requestQueue,
@@ -298,20 +294,47 @@ await Actor.main(async () => {
         if (specialFile) {
           const bodyText = await readResponseText(response ?? null);
 
-          if (status === 200 && typeof bodyText === 'string' && bodyText.trim()) {
-            files = files ?? {};
+          if (specialFile === 'robots') {
+            const sitemapFallbackUrl = buildSiteFileUrl(finalUrl ?? request.url, '/sitemap.xml');
 
-            if (specialFile === 'robots') {
+            if (status === 200 && typeof bodyText === 'string' && bodyText.trim()) {
+              files = files ?? {};
               files.robotsTxt = bodyText;
 
               const sitemapUrls = extractSitemapUrlsFromRobots(bodyText);
-              for (const sitemapUrl of sitemapUrls) {
+
+              if (sitemapUrls.length) {
+                for (const sitemapUrl of sitemapUrls) {
+                  await requestQueue.addRequest({
+                    url: ensureHttpsUrl(sitemapUrl),
+                    userData: { depth: 0, isSeed: true, isHome: false, specialFile: 'sitemap' },
+                  });
+                }
+                sitemapQueued = true;
+              } else if (!sitemapQueued) {
                 await requestQueue.addRequest({
-                  url: ensureHttpsUrl(sitemapUrl),
+                  url: sitemapFallbackUrl,
                   userData: { depth: 0, isSeed: true, isHome: false, specialFile: 'sitemap' },
                 });
+                sitemapQueued = true;
               }
+
+              return;
             }
+
+            if (!sitemapQueued) {
+              await requestQueue.addRequest({
+                url: sitemapFallbackUrl,
+                userData: { depth: 0, isSeed: true, isHome: false, specialFile: 'sitemap' },
+              });
+              sitemapQueued = true;
+            }
+
+            return;
+          }
+
+          if (status === 200 && typeof bodyText === 'string' && bodyText.trim()) {
+            files = files ?? {};
 
             if (specialFile === 'llms') {
               files.llmsTxt = bodyText;
