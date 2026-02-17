@@ -59,20 +59,12 @@ export interface IHomeMobileSnapshot {
   consentLog: IConsentLog[];
   /** Raw HTML of the final homepage document. */
   html: string;
-  /**
-   * Public screenshot URL (no token).
-   * Example: https://api.apify.com/v2/key-value-stores/<storeId>/records/<key>
-   */
+  /** Public screenshot URL for the first screen (before consent). */
   screenshotKey: string;
+  /** Public screenshot URL for the first screen after consent + scroll. */
+  secondScreenshotKey: string;
   /** Screenshot content type, usually "image/png". */
   screenshotContentType: string;
-  /**
-   * Public URL of the second screenshot (after consent + scroll).
-   * Same format as screenshotKey.
-   */
-  secondScreenshotKey?: string;
-  /** Content type of the second screenshot (usually "image/png"). */
-  secondScreenshotContentType?: string;
   /** Page title as reported by the browser. */
   title?: string;
   /** Detected <meta name="description"> content, if found. */

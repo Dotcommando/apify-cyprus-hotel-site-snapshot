@@ -9,6 +9,7 @@ import { MOCK_SITE_2_SITEMAP_XML } from '../mocks/mock-site-2-sitemap-xml.js';
 const HOTEL_ID = '65f0c1a2b3c4d5e6f7a80002';
 const DOMAIN = 'www.site-2.mock';
 const HOME_URL = 'https://www.site-2.mock/';
+const KVS_ID = 'MOCK_KVS_ID_SITE_2';
 
 const VIEWPORT: IViewport = {
   width: 390,
@@ -20,6 +21,11 @@ const VIEWPORT: IViewport = {
   userAgent:
     'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
 };
+
+const screenshotKey1Raw = `home-mobile-${HOTEL_ID}-1.png`;
+const screenshotKey2Raw = `home-mobile-${HOTEL_ID}-2.png`;
+const screenshotUrl1 = `https://api.apify.com/v2/key-value-stores/${KVS_ID}/records/${encodeURIComponent(screenshotKey1Raw)}`;
+const screenshotUrl2 = `https://api.apify.com/v2/key-value-stores/${KVS_ID}/records/${encodeURIComponent(screenshotKey2Raw)}`;
 
 const HOME: IHomeMobileSnapshot = {
   url: HOME_URL,
@@ -40,13 +46,13 @@ const HOME: IHomeMobileSnapshot = {
     },
   ],
   html: MOCK_SITE_2_HTML,
-  screenshotKey: `home-mobile-${HOTEL_ID}-1.png`,
+  screenshotKey: screenshotUrl1,
+  secondScreenshotKey: screenshotUrl2,
   screenshotContentType: 'image/png',
   title: 'Site 2 Mock Resort — Official Website',
   metaDescription: 'Mock beachfront resort on Cyprus. Book direct, enjoy member rates, spa, restaurants and events.',
   notes: [
     'robots.txt did not include Sitemap directive; sitemap discovered at default path /sitemap.xml (test case).',
-    `second-screenshot:home-mobile-${HOTEL_ID}-2.png`,
   ],
 };
 

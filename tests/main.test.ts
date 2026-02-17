@@ -39,6 +39,9 @@ test('main.ts produces OUTPUT and stores screenshots (mocked apify/crawlee/playw
     main: async (fn: AnyFn) => fn(),
     getInput: async () => input,
     setValue,
+    getEnv: () => ({
+      defaultKeyValueStoreId: 'pfi1mt53icgvHopFf',
+    }),
   };
 
   const log = {
@@ -116,7 +119,7 @@ test('main.ts produces OUTPUT and stores screenshots (mocked apify/crawlee/playw
       async evaluate(fnOrString: any) {
         if (typeof fnOrString === 'function') {
           try {
-            const res = fnOrString();
+            const res = fnOrString(100);
             return res;
           } catch {
             return undefined;
@@ -201,9 +204,11 @@ test('main.ts produces OUTPUT and stores screenshots (mocked apify/crawlee/playw
     assert.equal(output.home.title, 'Mock Site 1 — Luxury Resort');
     assert.equal(output.home.metaDescription, 'Mock meta description for site-1');
 
-    assert.ok(typeof output.home.screenshotKey === 'string' && output.home.screenshotKey.endsWith('-1.png'));
-    const notes = Array.isArray(output.home.notes) ? output.home.notes : [];
-    assert.ok(notes.some((n: string) => typeof n === 'string' && n.startsWith('second-screenshot:')));
+    assert.ok(typeof output.home.screenshotKey === 'string' && output.home.screenshotKey.includes('/records/home-mobile-'));
+    assert.ok(output.home.screenshotKey.endsWith('-1.png'));
+
+    assert.ok(typeof output.home.secondScreenshotKey === 'string' && output.home.secondScreenshotKey.includes('/records/home-mobile-'));
+    assert.ok(output.home.secondScreenshotKey.endsWith('-2.png'));
 
     const screenshotCalls = setValueCalls.filter(
       (c) => typeof c[0] === 'string' && String(c[0]).startsWith('home-mobile-') && String(c[0]).endsWith('.png')

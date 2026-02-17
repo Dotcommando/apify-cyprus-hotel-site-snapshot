@@ -24,6 +24,7 @@ import {
   buildRedirectChainSimple,
   clampInt,
   waitForAboveTheFoldMedia,
+  buildKvsRecordPublicUrl,
 } from './utils/index.js';
 
 const DEFAULT_VIEWPORT: IViewport = {
@@ -39,12 +40,6 @@ const DEFAULT_VIEWPORT: IViewport = {
 
 function mergeViewport(v?: Partial<IViewport>): IViewport {
   return { ...DEFAULT_VIEWPORT, ...(v ?? {}) };
-}
-
-function buildPublicKvsRecordUrl(recordKey: string): string {
-  const base = String(process.env.APIFY_API_BASE_URL ?? 'https://api.apify.com').replace(/\/+$/g, '');
-  const storeId = String(process.env.APIFY_DEFAULT_KEY_VALUE_STORE_ID ?? 'default').trim() || 'default';
-  return `${base}/v2/key-value-stores/${encodeURIComponent(storeId)}/records/${encodeURIComponent(recordKey)}`;
 }
 
 async function tryDismissConsent(page: Page): Promise<IConsentLog[]> {
@@ -99,9 +94,8 @@ function buildHomeSnapshot(params: {
   consentLog: IConsentLog[];
   html: string;
   screenshotKey: string;
+  secondScreenshotKey: string;
   screenshotContentType: string;
-  secondScreenshotKey?: string;
-  secondScreenshotContentType?: string;
   title?: string;
   metaDescription?: string;
   notes?: string[];
@@ -118,9 +112,8 @@ function buildHomeSnapshot(params: {
     consentLog,
     html,
     screenshotKey,
-    screenshotContentType,
     secondScreenshotKey,
-    secondScreenshotContentType,
+    screenshotContentType,
     title,
     metaDescription,
     notes,
@@ -138,9 +131,8 @@ function buildHomeSnapshot(params: {
     consentLog,
     html,
     screenshotKey,
+    secondScreenshotKey,
     screenshotContentType,
-    ...(secondScreenshotKey ? { secondScreenshotKey } : {}),
-    ...(secondScreenshotContentType ? { secondScreenshotContentType } : {}),
     title,
     metaDescription,
     notes,
@@ -157,7 +149,6 @@ await Actor.main(async () => {
 
   const homeUrl = normalizeDomainToHomeUrl(domain);
   const seedUrls = uniqStrings([...(input.seedUrls ?? []), homeUrl]).map(ensureHttpsUrl);
-
   const maxPages = clampInt(input.maxPages ?? 25, 1, 500);
   const maxDepth = clampInt(input.maxDepth ?? 1, 0, 25);
   const maxRequestsPerMinute = clampInt(input.maxRequestsPerMinute ?? 60, 1, 6000);
@@ -182,6 +173,7 @@ await Actor.main(async () => {
   let homeSnapshot: IHomeMobileSnapshot | undefined;
   const warnings: string[] = [];
 
+  const storeId = String(Actor.getEnv().defaultKeyValueStoreId ?? '').trim();
   const crawler = new PlaywrightCrawler({
     requestQueue: rq,
     maxRequestsPerCrawl: maxPages,
@@ -246,35 +238,42 @@ await Actor.main(async () => {
         if (isHome && takeHomeMobileScreenshot) {
           const notes: string[] = [];
 
+          await page.evaluate(() => window.scrollTo(0, 0)).catch(() => undefined);
           await page.waitForTimeout(3000);
+
           const mediaWait = await waitForAboveTheFoldMedia({ page, timeoutMs: 5000, pollIntervalMs: 250 });
+
           if (!mediaWait.ok) notes.push(`media-wait:${mediaWait.reason ?? 'unknown'}`);
 
           const screenshotContentType = 'image/png';
-          const screenshotKey1 = `home-mobile-${hotelId}-1.png`;
+          const screenshotKey1Raw = `home-mobile-${hotelId}-1.png`;
           const buffer1 = await page.screenshot({ fullPage: false, type: 'png' });
 
-          await Actor.setValue(screenshotKey1, buffer1, { contentType: screenshotContentType });
+          await Actor.setValue(screenshotKey1Raw, buffer1, { contentType: screenshotContentType });
 
-          const screenshotUrl1 = buildPublicKvsRecordUrl(screenshotKey1);
           const consentAttempted = tryDismissConsentFlag;
           let consentLog: IConsentLog[] = [];
 
           if (tryDismissConsentFlag) consentLog = await tryDismissConsent(page);
 
-          await page.evaluate((y) => window.scrollBy(0, y), Math.floor(viewport.height * 0.9));
+          await page.evaluate((y) => window.scrollBy(0, y), Math.floor(viewport.height * 0.9)).catch(() => undefined);
           await page.waitForTimeout(800);
 
-          const screenshotKey2 = `home-mobile-${hotelId}-2.png`;
+          const screenshotKey2Raw = `home-mobile-${hotelId}-2.png`;
           const buffer2 = await page.screenshot({ fullPage: false, type: 'png' });
 
-          await Actor.setValue(screenshotKey2, buffer2, { contentType: screenshotContentType });
+          await Actor.setValue(screenshotKey2Raw, buffer2, { contentType: screenshotContentType });
 
-          const screenshotUrl2 = buildPublicKvsRecordUrl(screenshotKey2);
-
-          notes.push(`second-screenshot:${screenshotKey2}`);
-
+          if (!storeId) notes.push('kvs-id-missing');
           if (!html && storeHtml && isProbablyHtml(contentType)) notes.push('home-html-missing');
+
+          const screenshotUrl1 = storeId
+            ? buildKvsRecordPublicUrl({ storeId, key: screenshotKey1Raw })
+            : screenshotKey1Raw;
+
+          const screenshotUrl2 = storeId
+            ? buildKvsRecordPublicUrl({ storeId, key: screenshotKey2Raw })
+            : screenshotKey2Raw;
 
           homeSnapshot = buildHomeSnapshot({
             url: request.url,
@@ -288,9 +287,8 @@ await Actor.main(async () => {
             consentLog,
             html: html ?? '',
             screenshotKey: screenshotUrl1,
-            screenshotContentType,
             secondScreenshotKey: screenshotUrl2,
-            secondScreenshotContentType: screenshotContentType,
+            screenshotContentType,
             title,
             metaDescription,
             notes: notes.length ? notes : undefined,
@@ -360,5 +358,6 @@ await Actor.main(async () => {
   await Actor.setValue('OUTPUT', output);
 
   const dataset = await Dataset.open();
+
   await dataset.pushData(output);
 });

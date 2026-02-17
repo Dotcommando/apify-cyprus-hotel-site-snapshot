@@ -37,6 +37,7 @@ const MOCK_SNAPSHOT_ID = '65c8d8f1d2a8b0f5a1b2c3e5';
 
 const HOME_URL = 'https://www.site-1.mock/';
 const DOMAIN = 'site-1.mock';
+const KVS_ID = 'MOCK_KVS_ID_SITE_1';
 
 const HOME_VIEWPORT: IViewport = {
   width: 390,
@@ -53,6 +54,12 @@ const HOME_REDIRECT_CHAIN: IRedirectChainItem[] = [
   { url: 'http://www.site-1.mock/', status: 301, location: 'https://www.site-1.mock/' },
   { url: 'https://www.site-1.mock/', status: 200, resolvedUrl: 'https://www.site-1.mock/' },
 ];
+
+const screenshotKey1Raw = `home-mobile-${MOCK_HOTEL_ID}-1.png`;
+const screenshotKey2Raw = `home-mobile-${MOCK_HOTEL_ID}-2.png`;
+
+const screenshotUrl1 = `https://api.apify.com/v2/key-value-stores/${KVS_ID}/records/${encodeURIComponent(screenshotKey1Raw)}`;
+const screenshotUrl2 = `https://api.apify.com/v2/key-value-stores/${KVS_ID}/records/${encodeURIComponent(screenshotKey2Raw)}`;
 
 const HOME_SNAPSHOT: IHomeMobileSnapshot = {
   url: HOME_URL,
@@ -88,12 +95,12 @@ const HOME_SNAPSHOT: IHomeMobileSnapshot = {
     },
   ],
   html: MOCK_SITE_1_HTML,
-  screenshotKey: `home-mobile-${MOCK_HOTEL_ID}-1.png`,
+  screenshotKey: screenshotUrl1,
+  secondScreenshotKey: screenshotUrl2,
   screenshotContentType: 'image/png',
   title: 'Site One Resort & Spa — Luxury Seafront Hotel',
-  metaDescription:
-    'A luxury seafront resort with private villas, fine dining, signature spa, and direct booking offers.',
-  notes: ['Some third-party resources were blocked in mock environment', `second-screenshot:home-mobile-${MOCK_HOTEL_ID}-2.png`],
+  metaDescription: 'A luxury seafront resort with private villas, fine dining, signature spa, and direct booking offers.',
+  notes: ['Some third-party resources were blocked in mock environment'],
 };
 
 export const MOCK_SITE_1_SNAPSHOT: IHotelSiteSnapshotDoc = {

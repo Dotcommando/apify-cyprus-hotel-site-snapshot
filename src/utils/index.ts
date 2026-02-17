@@ -67,6 +67,13 @@ export function clampInt(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, Math.trunc(value)));
 }
 
+export function buildKvsRecordPublicUrl(params: { storeId: string; key: string }): string {
+  const { storeId, key } = params;
+  const safeStoreId = encodeURIComponent(storeId);
+  const safeKey = encodeURIComponent(key);
+  return `https://api.apify.com/v2/key-value-stores/${safeStoreId}/records/${safeKey}`;
+}
+
 export async function waitForAboveTheFoldMedia(params: {
   page: Page;
   timeoutMs: number;
