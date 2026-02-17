@@ -1,6 +1,6 @@
 import { Actor, log } from 'apify';
 import { PlaywrightCrawler, RequestQueue, Dataset } from 'crawlee';
-import type { Page } from 'playwright';
+import type { Page, Response } from 'playwright';
 
 import {
   SNAPSHOT_STATUS,
@@ -21,6 +21,7 @@ import {
   uniqStrings,
   pickHeader,
   isProbablyHtml,
+  isProbablyTextDocument,
   buildRedirectChainSimple,
   clampInt,
   waitForAboveTheFoldMedia,
@@ -38,8 +39,57 @@ const DEFAULT_VIEWPORT: IViewport = {
     'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
 };
 
-function mergeViewport(v?: Partial<IViewport>): IViewport {
-  return { ...DEFAULT_VIEWPORT, ...(v ?? {}) };
+function mergeViewport(partialViewport?: Partial<IViewport>): IViewport {
+  return { ...DEFAULT_VIEWPORT, ...(partialViewport ?? {}) };
+}
+
+function buildAbsoluteUrl(baseUrl: string, maybeRelativeOrAbsolute: string): string {
+  try {
+    return new URL(maybeRelativeOrAbsolute, baseUrl).toString();
+  } catch {
+    return maybeRelativeOrAbsolute;
+  }
+}
+
+function buildSiteFileUrl(homeUrl: string, path: string): string {
+  return new URL(path, homeUrl).toString();
+}
+
+function extractSitemapUrlsFromRobots(robotsText: string): string[] {
+  const out: string[] = [];
+  const lines = robotsText.split(/\r?\n/g);
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) continue;
+
+    const match = /^sitemap\s*:\s*(.+)\s*$/i.exec(line);
+    if (!match) continue;
+
+    const url = match[1]?.trim();
+    if (url) out.push(url);
+  }
+
+  return uniqStrings(out);
+}
+
+function extractSitemapUrlsFromHtml(html: string, baseUrl: string): string[] {
+  const out: string[] = [];
+
+  const linkTagRegex = /<link\b[^>]*>/gi;
+  const relRegex = /\brel\s*=\s*["']sitemap["']/i;
+  const hrefRegex = /\bhref\s*=\s*["']([^"']+)["']/i;
+
+  const linkTags = html.match(linkTagRegex) ?? [];
+  for (const tag of linkTags) {
+    if (!relRegex.test(tag)) continue;
+    const hrefMatch = hrefRegex.exec(tag);
+    const href = hrefMatch?.[1]?.trim();
+    if (!href) continue;
+    out.push(buildAbsoluteUrl(baseUrl, href));
+  }
+
+  return uniqStrings(out);
 }
 
 async function tryDismissConsent(page: Page): Promise<IConsentLog[]> {
@@ -61,11 +111,11 @@ async function tryDismissConsent(page: Page): Promise<IConsentLog[]> {
 
   for (const selector of clickSelectors) {
     try {
-      const loc = page.locator(selector).first();
-      const count = await loc.count();
+      const locator = page.locator(selector).first();
+      const count = await locator.count();
       if (count === 0) continue;
 
-      await loc.click({ timeout: 1500 });
+      await locator.click({ timeout: 1500 });
       add({ type: CONSENT_ACTION_TYPE.CLICK, label: 'consent-click', selector, ok: true });
       return logs;
     } catch (e) {
@@ -139,6 +189,29 @@ function buildHomeSnapshot(params: {
   };
 }
 
+async function readDocumentBody(params: {
+  page: Page;
+  response: Response | null;
+  contentType: string | undefined;
+  storeHtml: boolean;
+}): Promise<string | undefined> {
+  const { page, response, contentType, storeHtml } = params;
+  if (!storeHtml) return undefined;
+
+  const shouldStore = isProbablyTextDocument(contentType);
+  if (!shouldStore) return undefined;
+
+  if (isProbablyHtml(contentType)) {
+    return page.content().catch(() => undefined);
+  }
+
+  if (response && 'text' in response) {
+    return response.text().catch(() => undefined);
+  }
+
+  return page.content().catch(() => undefined);
+}
+
 await Actor.main(async () => {
   const input = (await Actor.getInput<ICyprusHotelSiteSnapshotInput>()) ?? ({} as ICyprusHotelSiteSnapshotInput);
   const hotelId = String(input.hotelId ?? '').trim();
@@ -148,7 +221,10 @@ await Actor.main(async () => {
   if (!domain) throw new Error('Input.domain is required');
 
   const homeUrl = normalizeDomainToHomeUrl(domain);
-  const seedUrls = uniqStrings([...(input.seedUrls ?? []), homeUrl]).map(ensureHttpsUrl);
+  const robotsUrl = buildSiteFileUrl(homeUrl, '/robots.txt');
+  const llmsUrl = buildSiteFileUrl(homeUrl, '/llms.txt');
+  const sitemapDefaultUrl = buildSiteFileUrl(homeUrl, '/sitemap.xml');
+  const seedUrls = uniqStrings([...(input.seedUrls ?? []), homeUrl, robotsUrl, llmsUrl, sitemapDefaultUrl]).map(ensureHttpsUrl);
   const maxPages = clampInt(input.maxPages ?? 25, 1, 500);
   const maxDepth = clampInt(input.maxDepth ?? 1, 0, 25);
   const maxRequestsPerMinute = clampInt(input.maxRequestsPerMinute ?? 60, 1, 6000);
@@ -163,10 +239,11 @@ await Actor.main(async () => {
   if (input.debug) log.setLevel(log.LEVELS.DEBUG);
 
   const startedAt = nowIso();
-  const rq = await RequestQueue.open();
+  const requestQueue = await RequestQueue.open();
 
   for (const url of seedUrls) {
-    await rq.addRequest({ url, userData: { depth: 0, isSeed: true, isHome: url === homeUrl } });
+    const isHome = url === homeUrl;
+    await requestQueue.addRequest({ url, userData: { depth: 0, isSeed: true, isHome } });
   }
 
   const pages: ICrawledPageSnapshot[] = [];
@@ -174,8 +251,9 @@ await Actor.main(async () => {
   const warnings: string[] = [];
 
   const storeId = String(Actor.getEnv().defaultKeyValueStoreId ?? '').trim();
+
   const crawler = new PlaywrightCrawler({
-    requestQueue: rq,
+    requestQueue,
     maxRequestsPerCrawl: maxPages,
     maxRequestsPerMinute,
     navigationTimeoutSecs,
@@ -190,7 +268,7 @@ await Actor.main(async () => {
 
       let status: number | undefined;
       let finalUrl: string | undefined;
-      let html: string | undefined;
+      let body: string | undefined;
       let headers: Record<string, string> | undefined;
       let contentType: string | undefined;
       let title: string | undefined;
@@ -211,13 +289,15 @@ await Actor.main(async () => {
 
         contentType = pickHeader(headers, 'content-type');
 
-        if (storeHtml && isProbablyHtml(contentType)) html = await page.content();
-        title = await page.title().catch(() => undefined);
+        body = await readDocumentBody({ page, response: response ?? null, contentType, storeHtml });
 
-        try {
-          metaDescription = (await page.locator('meta[name="description"]').first().getAttribute('content')) ?? undefined;
-        } catch {
-          metaDescription = undefined;
+        if (isProbablyHtml(contentType)) {
+          title = await page.title().catch(() => undefined);
+          try {
+            metaDescription = (await page.locator('meta[name="description"]').first().getAttribute('content')) ?? undefined;
+          } catch {
+            metaDescription = undefined;
+          }
         }
 
         const pageFinishedAt = nowIso();
@@ -231,9 +311,30 @@ await Actor.main(async () => {
           redirectChain,
           startedAt: pageStartedAt,
           finishedAt: pageFinishedAt,
-          ...(storeHtml ? { html } : {}),
+          ...(storeHtml ? { html: body } : {}),
           ...(storeHeaders ? { headers } : {}),
         });
+
+        if (request.url.endsWith('/robots.txt') && typeof body === 'string' && body.trim()) {
+          const sitemapUrlsFromRobots = extractSitemapUrlsFromRobots(body).map((u) => buildAbsoluteUrl(homeUrl, u));
+
+          for (const sitemapUrl of sitemapUrlsFromRobots) {
+            await requestQueue.addRequest({
+              url: ensureHttpsUrl(sitemapUrl),
+              userData: { depth: 0, isSeed: true, isHome: false },
+            });
+          }
+        }
+
+        if (isHome && typeof body === 'string' && body.trim()) {
+          const sitemapUrlsFromHtml = extractSitemapUrlsFromHtml(body, finalUrl ?? request.url);
+          for (const sitemapUrl of sitemapUrlsFromHtml) {
+            await requestQueue.addRequest({
+              url: ensureHttpsUrl(sitemapUrl),
+              userData: { depth: 0, isSeed: true, isHome: false },
+            });
+          }
+        }
 
         if (isHome && takeHomeMobileScreenshot) {
           const notes: string[] = [];
@@ -242,7 +343,6 @@ await Actor.main(async () => {
           await page.waitForTimeout(3000);
 
           const mediaWait = await waitForAboveTheFoldMedia({ page, timeoutMs: 5000, pollIntervalMs: 250 });
-
           if (!mediaWait.ok) notes.push(`media-wait:${mediaWait.reason ?? 'unknown'}`);
 
           const screenshotContentType = 'image/png';
@@ -253,10 +353,9 @@ await Actor.main(async () => {
 
           const consentAttempted = tryDismissConsentFlag;
           let consentLog: IConsentLog[] = [];
-
           if (tryDismissConsentFlag) consentLog = await tryDismissConsent(page);
 
-          await page.evaluate((y) => window.scrollBy(0, y), Math.floor(viewport.height * 0.9)).catch(() => undefined);
+          await page.evaluate((scrollY) => window.scrollBy(0, scrollY), Math.floor(viewport.height * 0.9)).catch(() => undefined);
           await page.waitForTimeout(800);
 
           const screenshotKey2Raw = `home-mobile-${hotelId}-2.png`;
@@ -265,7 +364,7 @@ await Actor.main(async () => {
           await Actor.setValue(screenshotKey2Raw, buffer2, { contentType: screenshotContentType });
 
           if (!storeId) notes.push('kvs-id-missing');
-          if (!html && storeHtml && isProbablyHtml(contentType)) notes.push('home-html-missing');
+          if (!body && storeHtml && isProbablyTextDocument(contentType)) notes.push('home-body-missing');
 
           const screenshotUrl1 = storeId
             ? buildKvsRecordPublicUrl({ storeId, key: screenshotKey1Raw })
@@ -285,7 +384,7 @@ await Actor.main(async () => {
             redirectChain,
             consentAttempted,
             consentLog,
-            html: html ?? '',
+            html: body ?? '',
             screenshotKey: screenshotUrl1,
             secondScreenshotKey: screenshotUrl2,
             screenshotContentType,
@@ -298,10 +397,10 @@ await Actor.main(async () => {
         if (depth < maxDepth) {
           await enqueueLinks({
             strategy: 'same-domain',
-            transformRequestFunction: (req) => {
+            transformRequestFunction: (enqueueRequest) => {
               const nextDepth = depth + 1;
-              req.userData = { ...(req.userData ?? {}), depth: nextDepth, isHome: req.url === homeUrl };
-              return req;
+              enqueueRequest.userData = { ...(enqueueRequest.userData ?? {}), depth: nextDepth, isHome: enqueueRequest.url === homeUrl };
+              return enqueueRequest;
             },
           });
         }
@@ -320,7 +419,7 @@ await Actor.main(async () => {
           redirectChain,
           startedAt: pageStartedAt,
           finishedAt: pageFinishedAt,
-          ...(storeHtml ? { html } : {}),
+          ...(storeHtml ? { html: body } : {}),
           ...(storeHeaders ? { headers } : {}),
           error,
         });

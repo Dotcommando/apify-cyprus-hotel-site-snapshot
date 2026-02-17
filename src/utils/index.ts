@@ -39,9 +39,9 @@ export function uniqStrings(items: string[]): string[] {
 
 export function pickHeader(headers: Record<string, string> | undefined, name: string): string | undefined {
   if (!headers) return undefined;
-  const n = name.toLowerCase();
-  for (const [k, v] of Object.entries(headers)) {
-    if (k.toLowerCase() === n) return v;
+  const normalizedName = name.toLowerCase();
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === normalizedName) return value;
   }
   return undefined;
 }
@@ -49,6 +49,21 @@ export function pickHeader(headers: Record<string, string> | undefined, name: st
 export function isProbablyHtml(contentType: string | undefined): boolean {
   if (typeof contentType !== 'string') return true;
   return contentType.toLowerCase().includes('text/html');
+}
+
+export function isProbablyTextDocument(contentType: string | undefined): boolean {
+  if (typeof contentType !== 'string') return true;
+
+  const lower = contentType.toLowerCase();
+
+  if (lower.includes('text/')) return true;
+  if (lower.includes('application/xml')) return true;
+  if (lower.includes('text/xml')) return true;
+  if (lower.includes('application/xhtml+xml')) return true;
+  if (lower.includes('application/json')) return true;
+  if (lower.includes('+json')) return true;
+
+  return false;
 }
 
 export function buildRedirectChainSimple(params: { url: string; finalUrl?: string; status?: number }): IRedirectChainItem[] {
@@ -90,8 +105,8 @@ export async function waitForAboveTheFoldMedia(params: {
         const imgs = Array.from(document.querySelectorAll('img'));
 
         const videoOk = videos.every((v) => {
-          const ve = v as HTMLVideoElement;
-          return ve.readyState >= 2 || ve.networkState === 3;
+          const video = v as HTMLVideoElement;
+          return video.readyState >= 2 || video.networkState === 3;
         });
 
         const imgOk = imgs.every((img) => (img as HTMLImageElement).complete);
