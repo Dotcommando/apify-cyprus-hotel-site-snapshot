@@ -2,6 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { MOCK_SITE_1_HTML } from './mocks/mock-site-1-html.js';
+import { MOCK_SITE_1_ROBOTS_TXT } from './mocks/mock-site-1-robots-txt.js';
+import { MOCK_SITE_1_LLMS_TXT } from './mocks/mock-site-1-llms-txt.js';
+import { MOCK_SITE_1_SITEMAP_XML } from './mocks/mock-site-1-sitemap-xml.js';
 
 type AnyFn = (...args: any[]) => any;
 
@@ -63,6 +66,23 @@ test('main.ts produces OUTPUT and stores screenshots (mocked apify/crawlee/playw
     }),
   };
 
+  const responseForUrl = (u: string) => {
+    const isRobots = u.endsWith('/robots.txt');
+    const isLlms = u.endsWith('/llms.txt');
+    const isSitemap = u.endsWith('/sitemap.xml');
+
+    const contentType = isRobots || isLlms ? 'text/plain; charset=utf-8' : isSitemap ? 'application/xml; charset=utf-8' : 'text/html; charset=utf-8';
+
+    const bodyText = isRobots ? MOCK_SITE_1_ROBOTS_TXT : isLlms ? MOCK_SITE_1_LLMS_TXT : isSitemap ? MOCK_SITE_1_SITEMAP_XML : MOCK_SITE_1_HTML;
+
+    return {
+      status: () => 200,
+      url: () => u,
+      headers: () => ({ 'content-type': contentType }),
+      text: async () => bodyText,
+    };
+  };
+
   const makePage = (url: string) => {
     let currentUrl = url;
 
@@ -85,11 +105,7 @@ test('main.ts produces OUTPUT and stores screenshots (mocked apify/crawlee/playw
 
       async goto(u: string) {
         currentUrl = u;
-        return {
-          status: () => 200,
-          url: () => u,
-          headers: () => ({ 'content-type': 'text/html; charset=utf-8' }),
-        };
+        return responseForUrl(u);
       },
 
       url() {
@@ -116,10 +132,10 @@ test('main.ts produces OUTPUT and stores screenshots (mocked apify/crawlee/playw
         return undefined;
       },
 
-      async evaluate(fnOrString: any) {
+      async evaluate(fnOrString: any, arg?: any) {
         if (typeof fnOrString === 'function') {
           try {
-            const res = fnOrString(100);
+            const res = fnOrString(arg);
             return res;
           } catch {
             return undefined;
@@ -144,14 +160,20 @@ test('main.ts produces OUTPUT and stores screenshots (mocked apify/crawlee/playw
     async run() {
       assert.ok(this.opts?.requestHandler, 'requestHandler is required');
 
-      const homeUrl = 'https://www.site-1.mock/';
-      const ctx = {
-        request: { url: homeUrl, userData: { depth: 0, isSeed: true, isHome: true } },
-        page: makePage(homeUrl),
-        enqueueLinks: async () => {},
-      };
+      // emulate that crawler will visit queued requests (home + special files)
+      // order is not important for this test
+      for (const r of reqQueueRequests) {
+        const url = r.url as string;
+        const userData = r.userData ?? { depth: 0, isSeed: true, isHome: url === 'https://www.site-1.mock/' };
 
-      await this.opts.requestHandler(ctx);
+        const ctx = {
+          request: { url, userData },
+          page: makePage(url),
+          enqueueLinks: async () => {},
+        };
+
+        await this.opts.requestHandler(ctx);
+      }
     }
   }
 
@@ -200,7 +222,7 @@ test('main.ts produces OUTPUT and stores screenshots (mocked apify/crawlee/playw
 
     assert.ok(output.home, 'home snapshot missing');
     assert.equal(output.home.url, 'https://www.site-1.mock/');
-    assert.equal(output.home.html, MOCK_SITE_1_HTML);
+    assert.equal('html' in output.home, false, 'home.html must NOT exist anymore');
     assert.equal(output.home.title, 'Mock Site 1 — Luxury Resort');
     assert.equal(output.home.metaDescription, 'Mock meta description for site-1');
 
@@ -227,6 +249,11 @@ test('main.ts produces OUTPUT and stores screenshots (mocked apify/crawlee/playw
       assert.deepEqual(sOpts, { contentType: 'image/png' });
     }
 
+    assert.ok(output.files, 'files must be present when robots/llms/sitemap are fetched');
+    assert.equal(output.files.robotsTxt, MOCK_SITE_1_ROBOTS_TXT);
+    assert.equal(output.files.llmsTxt, MOCK_SITE_1_LLMS_TXT);
+    assert.equal(output.files.sitemapXml, MOCK_SITE_1_SITEMAP_XML);
+
     assert.ok(Array.isArray(output.pages));
     assert.ok(output.pages.length >= 1);
 
@@ -235,6 +262,13 @@ test('main.ts produces OUTPUT and stores screenshots (mocked apify/crawlee/playw
     assert.equal(homePage.status, 200);
     assert.equal(homePage.contentType, 'text/html; charset=utf-8');
     assert.equal(homePage.html, MOCK_SITE_1_HTML);
+
+    const robotsPage = output.pages.find((p: any) => String(p.url).endsWith('/robots.txt'));
+    const llmsPage = output.pages.find((p: any) => String(p.url).endsWith('/llms.txt'));
+    const sitemapPage = output.pages.find((p: any) => String(p.url).endsWith('/sitemap.xml'));
+    assert.equal(Boolean(robotsPage), false, 'robots.txt must not be in pages[]');
+    assert.equal(Boolean(llmsPage), false, 'llms.txt must not be in pages[]');
+    assert.equal(Boolean(sitemapPage), false, 'sitemap.xml must not be in pages[]');
 
     assert.equal(pushDataCalls.length, 1, 'Dataset.pushData should be called exactly once');
   } finally {

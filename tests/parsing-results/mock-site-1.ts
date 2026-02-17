@@ -1,14 +1,12 @@
 import {
   CONSENT_ACTION_TYPE,
   SNAPSHOT_STATUS,
-  type ICrawledPageSnapshot,
   type ICyprusHotelSiteSnapshotOutput,
   type IHomeMobileSnapshot,
   type IRedirectChainItem,
   type IViewport,
 } from '../../src/types.js';
 
-import { MOCK_SITE_1_HTML } from '../mocks/mock-site-1-html.js';
 import { MOCK_SITE_1_LLMS_TXT } from '../mocks/mock-site-1-llms-txt.js';
 import { MOCK_SITE_1_ROBOTS_TXT } from '../mocks/mock-site-1-robots-txt.js';
 import { MOCK_SITE_1_SITEMAP_XML } from '../mocks/mock-site-1-sitemap-xml.js';
@@ -17,16 +15,6 @@ type IHotelSiteSnapshotDoc = ICyprusHotelSiteSnapshotOutput & {
   _id: string;
   createdAt: string;
   updatedAt: string;
-};
-
-type IHotelSitePageDoc = ICrawledPageSnapshot & {
-  _id: string;
-  snapshotId: string;
-  hotelId: string;
-  domain: string;
-  createdAt: string;
-  updatedAt: string;
-  bodyText?: string;
 };
 
 const NOW_ISO = '2026-02-17T10:15:30.000Z';
@@ -94,7 +82,6 @@ const HOME_SNAPSHOT: IHomeMobileSnapshot = {
       ok: true,
     },
   ],
-  html: MOCK_SITE_1_HTML,
   screenshotKey: screenshotUrl1,
   secondScreenshotKey: screenshotUrl2,
   screenshotContentType: 'image/png',
@@ -112,6 +99,11 @@ export const MOCK_SITE_1_SNAPSHOT: IHotelSiteSnapshotDoc = {
   startedAt: NOW_ISO,
   finishedAt: FINISH_ISO,
   home: HOME_SNAPSHOT,
+  files: {
+    robotsTxt: MOCK_SITE_1_ROBOTS_TXT,
+    llmsTxt: MOCK_SITE_1_LLMS_TXT,
+    sitemapXml: MOCK_SITE_1_SITEMAP_XML,
+  },
   pages: [],
   warnings: ['mock-warning: blocked third-party scripts'],
   meta: {
@@ -123,203 +115,3 @@ export const MOCK_SITE_1_SNAPSHOT: IHotelSiteSnapshotDoc = {
   createdAt: NOW_ISO,
   updatedAt: FINISH_ISO,
 };
-
-const makeHtmlPage = (url: string, title: string, h1: string, description: string): string => {
-  return `<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>${title}</title>
-    <meta name="description" content="${description}" />
-    <link rel="canonical" href="${url}" />
-    <script async src="https://www.googletagmanager.com/gtag/js?id=G-MOCKGA41"></script>
-    <script>
-      window.dataLayer = window.dataLayer || [];
-      function gtag(){dataLayer.push(arguments);}
-      gtag('js', new Date());
-      gtag('config','G-MOCKGA41');
-    </script>
-  </head>
-  <body>
-    <header>
-      <a href="https://www.site-1.mock/">Home</a>
-      <a href="https://www.site-1.mock/rooms/">Rooms</a>
-      <a href="https://www.site-1.mock/dining/">Dining</a>
-      <a href="https://www.site-1.mock/spa/">Spa</a>
-      <a href="https://www.site-1.mock/offers/">Offers</a>
-    </header>
-    <main>
-      <h1>${h1}</h1>
-      <p>${description}</p>
-      <a href="https://www.site-1.mock/contact/" data-track="contact">Contact</a>
-    </main>
-  </body>
-</html>`;
-};
-
-export const MOCK_SITE_PAGES: IHotelSitePageDoc[] = [
-  {
-    _id: '65c8d911d2a8b0f5a1b2c3f1',
-    snapshotId: MOCK_SNAPSHOT_ID,
-    hotelId: MOCK_HOTEL_ID,
-    domain: DOMAIN,
-    url: HOME_URL,
-    finalUrl: HOME_URL,
-    status: 200,
-    contentType: 'text/html; charset=utf-8',
-    redirectChain: HOME_REDIRECT_CHAIN,
-    startedAt: NOW_ISO,
-    finishedAt: FINISH_ISO,
-    html: MOCK_SITE_1_HTML,
-    headers: {
-      'content-type': 'text/html; charset=utf-8',
-      'cache-control': 'no-store',
-      server: 'mock-nginx',
-    },
-    createdAt: NOW_ISO,
-    updatedAt: FINISH_ISO,
-  },
-  {
-    _id: '65c8d922d2a8b0f5a1b2c3f2',
-    snapshotId: MOCK_SNAPSHOT_ID,
-    hotelId: MOCK_HOTEL_ID,
-    domain: DOMAIN,
-    url: 'https://www.site-1.mock/rooms/',
-    finalUrl: 'https://www.site-1.mock/rooms/',
-    status: 200,
-    contentType: 'text/html; charset=utf-8',
-    redirectChain: [{ url: 'https://www.site-1.mock/rooms/', status: 200, resolvedUrl: 'https://www.site-1.mock/rooms/' }],
-    startedAt: '2026-02-17T10:15:45.000Z',
-    finishedAt: '2026-02-17T10:15:49.000Z',
-    html: makeHtmlPage(
-      'https://www.site-1.mock/rooms/',
-      'Rooms & Villas — Site One Resort & Spa',
-      'Rooms & Villas',
-      'Sea-view suites and private villas with curated amenities.'
-    ),
-    headers: { 'content-type': 'text/html; charset=utf-8', server: 'mock-nginx' },
-    createdAt: '2026-02-17T10:15:49.000Z',
-    updatedAt: '2026-02-17T10:15:49.000Z',
-  },
-  {
-    _id: '65c8d933d2a8b0f5a1b2c3f3',
-    snapshotId: MOCK_SNAPSHOT_ID,
-    hotelId: MOCK_HOTEL_ID,
-    domain: DOMAIN,
-    url: 'https://www.site-1.mock/dining/',
-    finalUrl: 'https://www.site-1.mock/dining/',
-    status: 200,
-    contentType: 'text/html; charset=utf-8',
-    redirectChain: [{ url: 'https://www.site-1.mock/dining/', status: 200, resolvedUrl: 'https://www.site-1.mock/dining/' }],
-    startedAt: '2026-02-17T10:15:50.000Z',
-    finishedAt: '2026-02-17T10:15:54.000Z',
-    html: makeHtmlPage(
-      'https://www.site-1.mock/dining/',
-      'Dining — Site One Resort & Spa',
-      'Dining',
-      'Mediterranean fine dining, beachfront grill, and wine cellar tastings.'
-    ),
-    headers: { 'content-type': 'text/html; charset=utf-8', server: 'mock-nginx' },
-    createdAt: '2026-02-17T10:15:54.000Z',
-    updatedAt: '2026-02-17T10:15:54.000Z',
-  },
-  {
-    _id: '65c8d944d2a8b0f5a1b2c3f4',
-    snapshotId: MOCK_SNAPSHOT_ID,
-    hotelId: MOCK_HOTEL_ID,
-    domain: DOMAIN,
-    url: 'https://www.site-1.mock/spa/',
-    finalUrl: 'https://www.site-1.mock/spa/',
-    status: 200,
-    contentType: 'text/html; charset=utf-8',
-    redirectChain: [{ url: 'https://www.site-1.mock/spa/', status: 200, resolvedUrl: 'https://www.site-1.mock/spa/' }],
-    startedAt: '2026-02-17T10:15:55.000Z',
-    finishedAt: '2026-02-17T10:15:58.000Z',
-    html: makeHtmlPage(
-      'https://www.site-1.mock/spa/',
-      'Spa & Wellness — Site One Resort & Spa',
-      'Spa & Wellness',
-      'Signature rituals, hammam, and wellbeing experiences by the sea.'
-    ),
-    headers: { 'content-type': 'text/html; charset=utf-8', server: 'mock-nginx' },
-    createdAt: '2026-02-17T10:15:58.000Z',
-    updatedAt: '2026-02-17T10:15:58.000Z',
-  },
-  {
-    _id: '65c8d955d2a8b0f5a1b2c3f5',
-    snapshotId: MOCK_SNAPSHOT_ID,
-    hotelId: MOCK_HOTEL_ID,
-    domain: DOMAIN,
-    url: 'https://www.site-1.mock/offers/',
-    finalUrl: 'https://www.site-1.mock/offers/',
-    status: 200,
-    contentType: 'text/html; charset=utf-8',
-    redirectChain: [{ url: 'https://www.site-1.mock/offers/', status: 200, resolvedUrl: 'https://www.site-1.mock/offers/' }],
-    startedAt: '2026-02-17T10:15:59.000Z',
-    finishedAt: '2026-02-17T10:16:03.000Z',
-    html: makeHtmlPage(
-      'https://www.site-1.mock/offers/',
-      'Offers — Site One Resort & Spa',
-      'Offers',
-      'Direct booking perks, seasonal packages, and flexible stay benefits.'
-    ),
-    headers: { 'content-type': 'text/html; charset=utf-8', server: 'mock-nginx' },
-    createdAt: '2026-02-17T10:16:03.000Z',
-    updatedAt: '2026-02-17T10:16:03.000Z',
-  },
-
-  {
-    _id: '65c8d966d2a8b0f5a1b2c3f6',
-    snapshotId: MOCK_SNAPSHOT_ID,
-    hotelId: MOCK_HOTEL_ID,
-    domain: DOMAIN,
-    url: 'https://www.site-1.mock/robots.txt',
-    finalUrl: 'https://www.site-1.mock/robots.txt',
-    status: 200,
-    contentType: 'text/plain; charset=utf-8',
-    redirectChain: [{ url: 'https://www.site-1.mock/robots.txt', status: 200, resolvedUrl: 'https://www.site-1.mock/robots.txt' }],
-    startedAt: '2026-02-17T10:16:04.000Z',
-    finishedAt: '2026-02-17T10:16:05.000Z',
-    headers: { 'content-type': 'text/plain; charset=utf-8', server: 'mock-nginx' },
-    bodyText: MOCK_SITE_1_ROBOTS_TXT,
-    createdAt: '2026-02-17T10:16:05.000Z',
-    updatedAt: '2026-02-17T10:16:05.000Z',
-  },
-  {
-    _id: '65c8d977d2a8b0f5a1b2c3f7',
-    snapshotId: MOCK_SNAPSHOT_ID,
-    hotelId: MOCK_HOTEL_ID,
-    domain: DOMAIN,
-    url: 'https://www.site-1.mock/llms.txt',
-    finalUrl: 'https://www.site-1.mock/llms.txt',
-    status: 200,
-    contentType: 'text/plain; charset=utf-8',
-    redirectChain: [{ url: 'https://www.site-1.mock/llms.txt', status: 200, resolvedUrl: 'https://www.site-1.mock/llms.txt' }],
-    startedAt: '2026-02-17T10:16:06.000Z',
-    finishedAt: '2026-02-17T10:16:07.000Z',
-    headers: { 'content-type': 'text/plain; charset=utf-8', server: 'mock-nginx' },
-    bodyText: MOCK_SITE_1_LLMS_TXT,
-    createdAt: '2026-02-17T10:16:07.000Z',
-    updatedAt: '2026-02-17T10:16:07.000Z',
-  },
-  {
-    _id: '65c8d988d2a8b0f5a1b2c3f8',
-    snapshotId: MOCK_SNAPSHOT_ID,
-    hotelId: MOCK_HOTEL_ID,
-    domain: DOMAIN,
-    url: 'https://www.site-1.mock/mock-site-sitemap.xml',
-    finalUrl: 'https://www.site-1.mock/mock-site-sitemap.xml',
-    status: 200,
-    contentType: 'application/xml; charset=utf-8',
-    redirectChain: [
-      { url: 'https://www.site-1.mock/mock-site-sitemap.xml', status: 200, resolvedUrl: 'https://www.site-1.mock/mock-site-sitemap.xml' },
-    ],
-    startedAt: '2026-02-17T10:16:08.000Z',
-    finishedAt: '2026-02-17T10:16:10.000Z',
-    headers: { 'content-type': 'application/xml; charset=utf-8', server: 'mock-nginx' },
-    bodyText: MOCK_SITE_1_SITEMAP_XML,
-    createdAt: '2026-02-17T10:16:10.000Z',
-    updatedAt: '2026-02-17T10:16:10.000Z',
-  },
-];

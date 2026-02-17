@@ -38,6 +38,25 @@ export interface IRedirectChainItem {
   resolvedUrl?: string;
 }
 
+export interface IConsentLog {
+  /** When the action was executed (ISO string). */
+  at: string;
+  /** Action kind used to try to dismiss/accept a consent banner. */
+  type: CONSENT_ACTION_TYPE;
+  /** Human-readable description of what was attempted. */
+  label: string;
+  /** CSS selector used (for click actions), if any. */
+  selector?: string;
+  /** Text that was searched for / matched, if any. */
+  textMatch?: string;
+  /** How long we waited (ms) for waits/timeouts, if applicable. */
+  durationMs?: number;
+  /** Whether the action succeeded. */
+  ok: boolean;
+  /** Error message, if action failed. */
+  error?: string;
+}
+
 export interface IHomeMobileSnapshot {
   /** The homepage URL that was opened for the snapshot. */
   url: string;
@@ -57,11 +76,9 @@ export interface IHomeMobileSnapshot {
   consentAttempted: boolean;
   /** Consent action log (attempts, clicks, waits, etc.). */
   consentLog: IConsentLog[];
-  /** Raw HTML of the final homepage document. */
-  html: string;
   /** Public screenshot URL for the first screen (before consent). */
   screenshotKey: string;
-  /** Public screenshot URL for the first screen after consent + scroll. */
+  /** Public screenshot URL for the second screen after consent + scroll. */
   secondScreenshotKey: string;
   /** Screenshot content type, usually "image/png". */
   screenshotContentType: string;
@@ -73,23 +90,13 @@ export interface IHomeMobileSnapshot {
   notes?: string[];
 }
 
-export interface IConsentLog {
-  /** When the action was executed (ISO string). */
-  at: string;
-  /** Action kind used to try to dismiss/accept a consent banner. */
-  type: CONSENT_ACTION_TYPE;
-  /** Human-readable description of what was attempted. */
-  label: string;
-  /** CSS selector used (for click actions), if any. */
-  selector?: string;
-  /** Text that was searched for / matched, if any. */
-  textMatch?: string;
-  /** How long we waited (ms) for waits/timeouts, if applicable. */
-  durationMs?: number;
-  /** Whether the action succeeded. */
-  ok: boolean;
-  /** Error message, if action failed. */
-  error?: string;
+export interface IHotelSiteSnapshotFiles {
+  /** Raw robots.txt content (text/plain). Present only if successfully fetched. */
+  robotsTxt?: string;
+  /** Raw sitemap XML content. Present only if successfully fetched/discovered. */
+  sitemapXml?: string;
+  /** Raw llms.txt content (text/plain). Present only if successfully fetched. */
+  llmsTxt?: string;
 }
 
 export interface ICyprusHotelSiteSnapshotInput {
@@ -161,9 +168,11 @@ export interface ICyprusHotelSiteSnapshotOutput {
   startedAt: string;
   /** When the actor run finished (ISO string). */
   finishedAt: string;
-  /** Snapshot of the homepage (HTML + optional mobile screenshot). */
+  /** Snapshot of the homepage (no raw HTML; screenshots + meta only). */
   home?: IHomeMobileSnapshot;
-  /** Crawled pages (may include home, depending on implementation). */
+  /** Small “well-known” files captured on run (optional). */
+  files?: IHotelSiteSnapshotFiles;
+  /** Crawled pages (does NOT include robots/sitemap/llms). */
   pages: ICrawledPageSnapshot[];
   /** Non-fatal warnings collected during processing. */
   warnings?: string[];

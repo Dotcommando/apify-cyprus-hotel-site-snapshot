@@ -1,7 +1,6 @@
-import type { ICrawledPageSnapshot, ICyprusHotelSiteSnapshotOutput, IHomeMobileSnapshot, IViewport } from '../../src/types.js';
+import type { ICyprusHotelSiteSnapshotOutput, IHomeMobileSnapshot, IViewport } from '../../src/types.js';
 import { CONSENT_ACTION_TYPE, SNAPSHOT_STATUS } from '../../src/types.js';
 
-import { MOCK_SITE_2_HTML } from '../mocks/mock-site-2-html.js';
 import { MOCK_SITE_2_LLMS_TXT } from '../mocks/mock-site-2-llms-txt.js';
 import { MOCK_SITE_2_ROBOTS_TXT } from '../mocks/mock-site-2-robots-txt.js';
 import { MOCK_SITE_2_SITEMAP_XML } from '../mocks/mock-site-2-sitemap-xml.js';
@@ -45,15 +44,12 @@ const HOME: IHomeMobileSnapshot = {
       ok: true,
     },
   ],
-  html: MOCK_SITE_2_HTML,
   screenshotKey: screenshotUrl1,
   secondScreenshotKey: screenshotUrl2,
   screenshotContentType: 'image/png',
   title: 'Site 2 Mock Resort — Official Website',
   metaDescription: 'Mock beachfront resort on Cyprus. Book direct, enjoy member rates, spa, restaurants and events.',
-  notes: [
-    'robots.txt did not include Sitemap directive; sitemap discovered at default path /sitemap.xml (test case).',
-  ],
+  notes: ['robots.txt did not include Sitemap directive; sitemap discovered at default path /sitemap.xml (test case).'],
 };
 
 export const MOCK_SITE_2_SNAPSHOT: ICyprusHotelSiteSnapshotOutput = {
@@ -64,6 +60,11 @@ export const MOCK_SITE_2_SNAPSHOT: ICyprusHotelSiteSnapshotOutput = {
   startedAt: '2026-02-17T09:12:00.000Z',
   finishedAt: '2026-02-17T09:12:25.000Z',
   home: HOME,
+  files: {
+    robotsTxt: MOCK_SITE_2_ROBOTS_TXT,
+    llmsTxt: MOCK_SITE_2_LLMS_TXT,
+    sitemapXml: MOCK_SITE_2_SITEMAP_XML,
+  },
   pages: [],
   warnings: [
     'robots.txt contained no Sitemap directive; used https://www.site-2.mock/sitemap.xml',
@@ -71,60 +72,3 @@ export const MOCK_SITE_2_SNAPSHOT: ICyprusHotelSiteSnapshotOutput = {
   ],
   meta: { mock: true },
 };
-
-export const MOCK_SITE_2_PAGES: ICrawledPageSnapshot[] = [
-  {
-    url: 'https://www.site-2.mock/robots.txt',
-    finalUrl: 'https://www.site-2.mock/robots.txt',
-    status: 200,
-    contentType: 'text/plain; charset=utf-8',
-    redirectChain: [],
-    startedAt: '2026-02-17T09:12:06.500Z',
-    finishedAt: '2026-02-17T09:12:06.650Z',
-    html: MOCK_SITE_2_ROBOTS_TXT,
-  },
-  {
-    url: 'https://www.site-2.mock/llms.txt',
-    finalUrl: 'https://www.site-2.mock/llms.txt',
-    status: 200,
-    contentType: 'text/plain; charset=utf-8',
-    redirectChain: [],
-    startedAt: '2026-02-17T09:12:06.700Z',
-    finishedAt: '2026-02-17T09:12:06.860Z',
-    html: MOCK_SITE_2_LLMS_TXT,
-  },
-  {
-    url: 'https://www.site-2.mock/sitemap.xml',
-    finalUrl: 'https://www.site-2.mock/sitemap.xml',
-    status: 200,
-    contentType: 'application/xml; charset=utf-8',
-    redirectChain: [],
-    startedAt: '2026-02-17T09:12:06.900Z',
-    finishedAt: '2026-02-17T09:12:07.200Z',
-    html: MOCK_SITE_2_SITEMAP_XML,
-  },
-  {
-    url: 'https://www.site-2.mock/',
-    finalUrl: 'https://www.site-2.mock/',
-    status: 200,
-    contentType: 'text/html; charset=utf-8',
-    redirectChain: [],
-    startedAt: '2026-02-17T09:12:00.000Z',
-    finishedAt: '2026-02-17T09:12:06.000Z',
-    html: MOCK_SITE_2_HTML,
-    headers: {
-      'content-type': 'text/html; charset=utf-8',
-      'cache-control': 'no-cache',
-    },
-  },
-  {
-    url: 'https://www.site-2.mock/?utm_source=sitemap&utm_medium=organic',
-    finalUrl: 'https://www.site-2.mock/?utm_source=sitemap&utm_medium=organic',
-    status: 200,
-    contentType: 'text/html; charset=utf-8',
-    redirectChain: [],
-    startedAt: '2026-02-17T09:12:12.250Z',
-    finishedAt: '2026-02-17T09:12:13.000Z',
-    html: MOCK_SITE_2_HTML,
-  },
-];

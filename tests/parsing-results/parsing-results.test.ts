@@ -22,5 +22,22 @@ test('mock snapshots are shaped as expected', () => {
       snap.home!.secondScreenshotKey.endsWith('-2.png'),
       `unexpected secondScreenshotKey: ${snap.home!.secondScreenshotKey}`
     );
+
+    assert.equal('html' in (snap.home as any), false, 'home.html must NOT exist anymore');
+
+    assert.ok(snap.files, 'files must exist in snapshot (mock expects robots/sitemap/llms present)');
+    assert.ok(typeof snap.files!.robotsTxt === 'string' && snap.files!.robotsTxt.length > 0, 'files.robotsTxt must be set');
+    assert.ok(
+      typeof snap.files!.sitemapXml === 'string' && snap.files!.sitemapXml.length > 0,
+      'files.sitemapXml must be set'
+    );
+    assert.ok(typeof snap.files!.llmsTxt === 'string' && snap.files!.llmsTxt.length > 0, 'files.llmsTxt must be set');
+
+    for (const p of snap.pages) {
+      assert.notEqual(p.url.endsWith('/robots.txt'), true, 'robots.txt must not be in pages[]');
+      assert.notEqual(p.url.endsWith('/llms.txt'), true, 'llms.txt must not be in pages[]');
+      assert.notEqual(p.url.endsWith('/sitemap.xml'), true, 'sitemap.xml must not be in pages[]');
+      assert.notEqual(p.url.endsWith('mock-site-sitemap.xml'), true, 'mock-site-sitemap.xml must not be in pages[]');
+    }
   }
 });

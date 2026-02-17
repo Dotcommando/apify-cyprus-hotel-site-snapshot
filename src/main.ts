@@ -11,6 +11,7 @@ import {
   type IHomeMobileSnapshot,
   type IConsentLog,
   type IViewport,
+  type IHotelSiteSnapshotFiles,
 } from './types.js';
 
 import {
@@ -21,12 +22,20 @@ import {
   uniqStrings,
   pickHeader,
   isProbablyHtml,
-  isProbablyTextDocument,
   buildRedirectChainSimple,
   clampInt,
   waitForAboveTheFoldMedia,
   buildKvsRecordPublicUrl,
 } from './utils/index.js';
+
+type SPECIAL_FILE_KIND = 'robots' | 'sitemap' | 'llms';
+
+interface IRequestUserData {
+  depth: number;
+  isSeed: boolean;
+  isHome: boolean;
+  specialFile?: SPECIAL_FILE_KIND;
+}
 
 const DEFAULT_VIEWPORT: IViewport = {
   width: 390,
@@ -41,14 +50,6 @@ const DEFAULT_VIEWPORT: IViewport = {
 
 function mergeViewport(partialViewport?: Partial<IViewport>): IViewport {
   return { ...DEFAULT_VIEWPORT, ...(partialViewport ?? {}) };
-}
-
-function buildAbsoluteUrl(baseUrl: string, maybeRelativeOrAbsolute: string): string {
-  try {
-    return new URL(maybeRelativeOrAbsolute, baseUrl).toString();
-  } catch {
-    return maybeRelativeOrAbsolute;
-  }
 }
 
 function buildSiteFileUrl(homeUrl: string, path: string): string {
@@ -68,25 +69,6 @@ function extractSitemapUrlsFromRobots(robotsText: string): string[] {
 
     const url = match[1]?.trim();
     if (url) out.push(url);
-  }
-
-  return uniqStrings(out);
-}
-
-function extractSitemapUrlsFromHtml(html: string, baseUrl: string): string[] {
-  const out: string[] = [];
-
-  const linkTagRegex = /<link\b[^>]*>/gi;
-  const relRegex = /\brel\s*=\s*["']sitemap["']/i;
-  const hrefRegex = /\bhref\s*=\s*["']([^"']+)["']/i;
-
-  const linkTags = html.match(linkTagRegex) ?? [];
-  for (const tag of linkTags) {
-    if (!relRegex.test(tag)) continue;
-    const hrefMatch = hrefRegex.exec(tag);
-    const href = hrefMatch?.[1]?.trim();
-    if (!href) continue;
-    out.push(buildAbsoluteUrl(baseUrl, href));
   }
 
   return uniqStrings(out);
@@ -142,7 +124,6 @@ function buildHomeSnapshot(params: {
   redirectChain: ReturnType<typeof buildRedirectChainSimple>;
   consentAttempted: boolean;
   consentLog: IConsentLog[];
-  html: string;
   screenshotKey: string;
   secondScreenshotKey: string;
   screenshotContentType: string;
@@ -160,7 +141,6 @@ function buildHomeSnapshot(params: {
     redirectChain,
     consentAttempted,
     consentLog,
-    html,
     screenshotKey,
     secondScreenshotKey,
     screenshotContentType,
@@ -179,7 +159,6 @@ function buildHomeSnapshot(params: {
     redirectChain,
     consentAttempted,
     consentLog,
-    html,
     screenshotKey,
     secondScreenshotKey,
     screenshotContentType,
@@ -189,31 +168,20 @@ function buildHomeSnapshot(params: {
   };
 }
 
-async function readDocumentBody(params: {
-  page: Page;
-  response: Response | null;
-  contentType: string | undefined;
-  storeHtml: boolean;
-}): Promise<string | undefined> {
-  const { page, response, contentType, storeHtml } = params;
-  if (!storeHtml) return undefined;
-
-  const shouldStore = isProbablyTextDocument(contentType);
-  if (!shouldStore) return undefined;
-
-  if (isProbablyHtml(contentType)) {
-    return page.content().catch(() => undefined);
+async function readResponseText(response: Response | null): Promise<string | undefined> {
+  if (!response) return undefined;
+  try {
+    const text = await response.text();
+    return text;
+  } catch {
+    return undefined;
   }
-
-  if (response && 'text' in response) {
-    return response.text().catch(() => undefined);
-  }
-
-  return page.content().catch(() => undefined);
 }
 
 await Actor.main(async () => {
-  const input = (await Actor.getInput<ICyprusHotelSiteSnapshotInput>()) ?? ({} as ICyprusHotelSiteSnapshotInput);
+  const rawInput = await Actor.getInput<ICyprusHotelSiteSnapshotInput>();
+  const input: Partial<ICyprusHotelSiteSnapshotInput> = rawInput ?? {};
+
   const hotelId = String(input.hotelId ?? '').trim();
   const domain = String(input.domain ?? '').trim();
 
@@ -221,10 +189,13 @@ await Actor.main(async () => {
   if (!domain) throw new Error('Input.domain is required');
 
   const homeUrl = normalizeDomainToHomeUrl(domain);
+
   const robotsUrl = buildSiteFileUrl(homeUrl, '/robots.txt');
   const llmsUrl = buildSiteFileUrl(homeUrl, '/llms.txt');
   const sitemapDefaultUrl = buildSiteFileUrl(homeUrl, '/sitemap.xml');
-  const seedUrls = uniqStrings([...(input.seedUrls ?? []), homeUrl, robotsUrl, llmsUrl, sitemapDefaultUrl]).map(ensureHttpsUrl);
+
+  const seedUrls = uniqStrings([...(input.seedUrls ?? []), homeUrl]).map(ensureHttpsUrl);
+
   const maxPages = clampInt(input.maxPages ?? 25, 1, 500);
   const maxDepth = clampInt(input.maxDepth ?? 1, 0, 25);
   const maxRequestsPerMinute = clampInt(input.maxRequestsPerMinute ?? 60, 1, 6000);
@@ -242,13 +213,30 @@ await Actor.main(async () => {
   const requestQueue = await RequestQueue.open();
 
   for (const url of seedUrls) {
-    const isHome = url === homeUrl;
-    await requestQueue.addRequest({ url, userData: { depth: 0, isSeed: true, isHome } });
+    const userData: IRequestUserData = { depth: 0, isSeed: true, isHome: url === homeUrl };
+    await requestQueue.addRequest({ url, userData });
   }
+
+  await requestQueue.addRequest({
+    url: robotsUrl,
+    userData: { depth: 0, isSeed: true, isHome: false, specialFile: 'robots' },
+  });
+
+  await requestQueue.addRequest({
+    url: llmsUrl,
+    userData: { depth: 0, isSeed: true, isHome: false, specialFile: 'llms' },
+  });
+
+  await requestQueue.addRequest({
+    url: sitemapDefaultUrl,
+    userData: { depth: 0, isSeed: true, isHome: false, specialFile: 'sitemap' },
+  });
 
   const pages: ICrawledPageSnapshot[] = [];
   let homeSnapshot: IHomeMobileSnapshot | undefined;
   const warnings: string[] = [];
+
+  let files: IHotelSiteSnapshotFiles | undefined;
 
   const storeId = String(Actor.getEnv().defaultKeyValueStoreId ?? '').trim();
 
@@ -261,18 +249,33 @@ await Actor.main(async () => {
     async requestHandler(ctx) {
       const { request, page, enqueueLinks } = ctx;
 
-      const depth = Number(request.userData?.depth ?? 0);
-      const isHome = Boolean(request.userData?.isHome);
+      const userData = request.userData as unknown;
+
+      const requestUserData: IRequestUserData =
+        typeof userData === 'object' && userData !== null
+          ? {
+            depth: Number((userData as Record<string, unknown>)['depth'] ?? 0),
+            isSeed: Boolean((userData as Record<string, unknown>)['isSeed']),
+            isHome: Boolean((userData as Record<string, unknown>)['isHome']),
+            specialFile:
+              (userData as Record<string, unknown>)['specialFile'] === 'robots' ||
+              (userData as Record<string, unknown>)['specialFile'] === 'sitemap' ||
+              (userData as Record<string, unknown>)['specialFile'] === 'llms'
+                ? ((userData as Record<string, unknown>)['specialFile'] as SPECIAL_FILE_KIND)
+                : undefined,
+          }
+          : { depth: 0, isSeed: false, isHome: false };
+
+      const depth = requestUserData.depth;
+      const isHome = requestUserData.isHome;
+      const specialFile = requestUserData.specialFile;
 
       const pageStartedAt = nowIso();
 
       let status: number | undefined;
       let finalUrl: string | undefined;
-      let body: string | undefined;
       let headers: Record<string, string> | undefined;
       let contentType: string | undefined;
-      let title: string | undefined;
-      let metaDescription: string | undefined;
 
       try {
         await page.setViewportSize({ width: viewport.width, height: viewport.height });
@@ -289,19 +292,44 @@ await Actor.main(async () => {
 
         contentType = pickHeader(headers, 'content-type');
 
-        body = await readDocumentBody({ page, response: response ?? null, contentType, storeHtml });
+        const redirectChain = buildRedirectChainSimple({ url: request.url, finalUrl, status });
+        const pageFinishedAt = nowIso();
 
-        if (isProbablyHtml(contentType)) {
-          title = await page.title().catch(() => undefined);
-          try {
-            metaDescription = (await page.locator('meta[name="description"]').first().getAttribute('content')) ?? undefined;
-          } catch {
-            metaDescription = undefined;
+        if (specialFile) {
+          const bodyText = await readResponseText(response ?? null);
+
+          if (status === 200 && typeof bodyText === 'string' && bodyText.trim()) {
+            files = files ?? {};
+
+            if (specialFile === 'robots') {
+              files.robotsTxt = bodyText;
+
+              const sitemapUrls = extractSitemapUrlsFromRobots(bodyText);
+              for (const sitemapUrl of sitemapUrls) {
+                await requestQueue.addRequest({
+                  url: ensureHttpsUrl(sitemapUrl),
+                  userData: { depth: 0, isSeed: true, isHome: false, specialFile: 'sitemap' },
+                });
+              }
+            }
+
+            if (specialFile === 'llms') {
+              files.llmsTxt = bodyText;
+            }
+
+            if (specialFile === 'sitemap') {
+              files.sitemapXml = bodyText;
+            }
           }
+
+          return;
         }
 
-        const pageFinishedAt = nowIso();
-        const redirectChain = buildRedirectChainSimple({ url: request.url, finalUrl, status });
+        let html: string | undefined;
+
+        if (storeHtml && isProbablyHtml(contentType)) {
+          html = await page.content().catch(() => undefined);
+        }
 
         pages.push({
           url: request.url,
@@ -311,33 +339,23 @@ await Actor.main(async () => {
           redirectChain,
           startedAt: pageStartedAt,
           finishedAt: pageFinishedAt,
-          ...(storeHtml ? { html: body } : {}),
+          ...(storeHtml ? { html } : {}),
           ...(storeHeaders ? { headers } : {}),
         });
 
-        if (request.url.endsWith('/robots.txt') && typeof body === 'string' && body.trim()) {
-          const sitemapUrlsFromRobots = extractSitemapUrlsFromRobots(body).map((u) => buildAbsoluteUrl(homeUrl, u));
-
-          for (const sitemapUrl of sitemapUrlsFromRobots) {
-            await requestQueue.addRequest({
-              url: ensureHttpsUrl(sitemapUrl),
-              userData: { depth: 0, isSeed: true, isHome: false },
-            });
-          }
-        }
-
-        if (isHome && typeof body === 'string' && body.trim()) {
-          const sitemapUrlsFromHtml = extractSitemapUrlsFromHtml(body, finalUrl ?? request.url);
-          for (const sitemapUrl of sitemapUrlsFromHtml) {
-            await requestQueue.addRequest({
-              url: ensureHttpsUrl(sitemapUrl),
-              userData: { depth: 0, isSeed: true, isHome: false },
-            });
-          }
-        }
-
         if (isHome && takeHomeMobileScreenshot) {
           const notes: string[] = [];
+
+          let title: string | undefined;
+          let metaDescription: string | undefined;
+
+          title = await page.title().catch(() => undefined);
+
+          try {
+            metaDescription = (await page.locator('meta[name="description"]').first().getAttribute('content')) ?? undefined;
+          } catch {
+            metaDescription = undefined;
+          }
 
           await page.evaluate(() => window.scrollTo(0, 0)).catch(() => undefined);
           await page.waitForTimeout(3000);
@@ -353,6 +371,7 @@ await Actor.main(async () => {
 
           const consentAttempted = tryDismissConsentFlag;
           let consentLog: IConsentLog[] = [];
+
           if (tryDismissConsentFlag) consentLog = await tryDismissConsent(page);
 
           await page.evaluate((scrollY) => window.scrollBy(0, scrollY), Math.floor(viewport.height * 0.9)).catch(() => undefined);
@@ -364,7 +383,6 @@ await Actor.main(async () => {
           await Actor.setValue(screenshotKey2Raw, buffer2, { contentType: screenshotContentType });
 
           if (!storeId) notes.push('kvs-id-missing');
-          if (!body && storeHtml && isProbablyTextDocument(contentType)) notes.push('home-body-missing');
 
           const screenshotUrl1 = storeId
             ? buildKvsRecordPublicUrl({ storeId, key: screenshotKey1Raw })
@@ -384,7 +402,6 @@ await Actor.main(async () => {
             redirectChain,
             consentAttempted,
             consentLog,
-            html: body ?? '',
             screenshotKey: screenshotUrl1,
             secondScreenshotKey: screenshotUrl2,
             screenshotContentType,
@@ -399,7 +416,12 @@ await Actor.main(async () => {
             strategy: 'same-domain',
             transformRequestFunction: (enqueueRequest) => {
               const nextDepth = depth + 1;
-              enqueueRequest.userData = { ...(enqueueRequest.userData ?? {}), depth: nextDepth, isHome: enqueueRequest.url === homeUrl };
+              const nextUserData: IRequestUserData = {
+                depth: nextDepth,
+                isSeed: false,
+                isHome: enqueueRequest.url === homeUrl,
+              };
+              enqueueRequest.userData = nextUserData;
               return enqueueRequest;
             },
           });
@@ -411,18 +433,20 @@ await Actor.main(async () => {
         const redirectChain = buildRedirectChainSimple({ url: request.url, finalUrl, status });
         const error = e instanceof Error ? e.message : String(e);
 
-        pages.push({
-          url: request.url,
-          finalUrl,
-          status,
-          contentType,
-          redirectChain,
-          startedAt: pageStartedAt,
-          finishedAt: pageFinishedAt,
-          ...(storeHtml ? { html: body } : {}),
-          ...(storeHeaders ? { headers } : {}),
-          error,
-        });
+        if (!specialFile) {
+          pages.push({
+            url: request.url,
+            finalUrl,
+            status,
+            contentType,
+            redirectChain,
+            startedAt: pageStartedAt,
+            finishedAt: pageFinishedAt,
+            ...(storeHtml ? { html: undefined } : {}),
+            ...(storeHeaders ? { headers } : {}),
+            error,
+          });
+        }
 
         warnings.push(`request-failed: ${request.url}: ${error}`);
       }
@@ -450,6 +474,7 @@ await Actor.main(async () => {
     finishedAt,
     home: homeSnapshot,
     pages,
+    ...(files && (files.robotsTxt || files.sitemapXml || files.llmsTxt) ? { files } : {}),
     ...(warnings.length ? { warnings } : {}),
     ...(fatalError ? { error: fatalError } : {}),
   };
@@ -457,6 +482,5 @@ await Actor.main(async () => {
   await Actor.setValue('OUTPUT', output);
 
   const dataset = await Dataset.open();
-
   await dataset.pushData(output);
 });
