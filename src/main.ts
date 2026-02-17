@@ -48,6 +48,9 @@ const DEFAULT_VIEWPORT: IViewport = {
     'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
 };
 
+const MAX_SITEMAP_URLS_FROM_ROBOTS = 10;
+const SPECIAL_REQUEST_BUDGET = 2 + MAX_SITEMAP_URLS_FROM_ROBOTS; // robots + llms + up to N sitemap urls
+
 function mergeViewport(partialViewport?: Partial<IViewport>): IViewport {
   return { ...DEFAULT_VIEWPORT, ...(partialViewport ?? {}) };
 }
@@ -119,7 +122,6 @@ function resolveSitemapUrls(params: { robotsText: string; baseUrl: string }): st
       continue;
     }
 
-    // Handle relative URLs from robots.txt, e.g. "Sitemap: /sitemap.xml"
     try {
       resolved.push(new URL(trimmed, baseUrl).toString());
     } catch {
@@ -226,9 +228,18 @@ function buildHomeSnapshot(params: {
 
 async function readResponseText(response: Response | null): Promise<string | undefined> {
   if (!response) return undefined;
+
   try {
     const text = await response.text();
     return text;
+  } catch {
+    // ignore
+  }
+
+  try {
+    const buffer = await response.body();
+    const decoder = new TextDecoder('utf-8');
+    return decoder.decode(buffer);
   } catch {
     return undefined;
   }
@@ -272,15 +283,21 @@ await Actor.main(async () => {
     await requestQueue.addRequest({ url, userData });
   }
 
-  await requestQueue.addRequest({
-    url: robotsUrl,
-    userData: { depth: 0, isSeed: true, isHome: false, specialFile: 'robots' },
-  });
+  await requestQueue.addRequest(
+    {
+      url: robotsUrl,
+      userData: { depth: 0, isSeed: true, isHome: false, specialFile: 'robots' },
+    },
+    { forefront: true },
+  );
 
-  await requestQueue.addRequest({
-    url: llmsUrl,
-    userData: { depth: 0, isSeed: true, isHome: false, specialFile: 'llms' },
-  });
+  await requestQueue.addRequest(
+    {
+      url: llmsUrl,
+      userData: { depth: 0, isSeed: true, isHome: false, specialFile: 'llms' },
+    },
+    { forefront: true },
+  );
 
   const pages: ICrawledPageSnapshot[] = [];
   let homeSnapshot: IHomeMobileSnapshot | undefined;
@@ -292,9 +309,11 @@ await Actor.main(async () => {
 
   let sitemapQueued = false;
 
+  const maxRequestsPerCrawl = maxPages + SPECIAL_REQUEST_BUDGET;
+
   const crawler = new PlaywrightCrawler({
     requestQueue,
-    maxRequestsPerCrawl: maxPages,
+    maxRequestsPerCrawl,
     maxRequestsPerMinute,
     navigationTimeoutSecs,
     requestHandlerTimeoutSecs,
@@ -342,25 +361,39 @@ await Actor.main(async () => {
               files = files ?? {};
               files.robotsTxt = bodyText;
 
-              const sitemapUrls = resolveSitemapUrls({
+              const sitemapUrlsAll = resolveSitemapUrls({
                 robotsText: bodyText,
                 baseUrl: finalUrl ?? request.url,
               });
 
+              const sitemapUrls = sitemapUrlsAll.slice(0, MAX_SITEMAP_URLS_FROM_ROBOTS);
+
+              sitemapQueued = true;
+
               if (sitemapUrls.length) {
-                sitemapQueued = true;
                 for (const sitemapUrl of sitemapUrls) {
-                  await requestQueue.addRequest({
-                    url: sitemapUrl,
-                    userData: { depth: 0, isSeed: true, isHome: false, specialFile: 'sitemap' },
-                  });
+                  await requestQueue.addRequest(
+                    {
+                      url: sitemapUrl,
+                      userData: { depth: 0, isSeed: true, isHome: false, specialFile: 'sitemap' },
+                    },
+                    { forefront: true },
+                  );
                 }
-              } else if (!sitemapQueued) {
-                sitemapQueued = true;
-                await requestQueue.addRequest({
-                  url: sitemapFallbackUrl,
-                  userData: { depth: 0, isSeed: true, isHome: false, specialFile: 'sitemap' },
-                });
+              } else {
+                await requestQueue.addRequest(
+                  {
+                    url: sitemapFallbackUrl,
+                    userData: { depth: 0, isSeed: true, isHome: false, specialFile: 'sitemap' },
+                  },
+                  { forefront: true },
+                );
+              }
+
+              if (sitemapUrlsAll.length > MAX_SITEMAP_URLS_FROM_ROBOTS) {
+                warnings.push(
+                  `robots-sitemap-limit: ${finalUrl ?? request.url}: found ${sitemapUrlsAll.length}, queued ${MAX_SITEMAP_URLS_FROM_ROBOTS}`,
+                );
               }
 
               return;
@@ -368,13 +401,22 @@ await Actor.main(async () => {
 
             if (!sitemapQueued) {
               sitemapQueued = true;
-              await requestQueue.addRequest({
-                url: sitemapFallbackUrl,
-                userData: { depth: 0, isSeed: true, isHome: false, specialFile: 'sitemap' },
-              });
+              await requestQueue.addRequest(
+                {
+                  url: sitemapFallbackUrl,
+                  userData: { depth: 0, isSeed: true, isHome: false, specialFile: 'sitemap' },
+                },
+                { forefront: true },
+              );
             }
 
             return;
+          }
+
+          if (specialFile === 'sitemap') {
+            const statusLabel = typeof status === 'number' ? String(status) : 'no-status';
+            if (status !== 200) warnings.push(`sitemap-non-200: ${request.url}: ${statusLabel}`);
+            if (status === 200 && (!bodyText || !bodyText.trim())) warnings.push(`sitemap-empty: ${request.url}`);
           }
 
           if (status === 200 && typeof bodyText === 'string' && bodyText.trim()) {
