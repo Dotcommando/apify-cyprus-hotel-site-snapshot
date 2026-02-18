@@ -27,6 +27,7 @@ import {
   waitForAboveTheFoldMedia,
   buildKvsRecordPublicUrl,
 } from './utils/index.js';
+import { CLICK_SELECTORS } from './const/index.js';
 
 type SPECIAL_FILE_KIND = 'robots' | 'sitemap' | 'llms';
 
@@ -141,20 +142,7 @@ async function tryDismissConsent(page: Page): Promise<IConsentLog[]> {
   const logs: IConsentLog[] = [];
   const add = (entry: Omit<IConsentLog, 'at'>) => logs.push({ at: nowIso(), ...entry });
 
-  const clickSelectors = [
-    'button:has-text("Accept")',
-    'button:has-text("I agree")',
-    'button:has-text("Agree")',
-    'button:has-text("Allow all")',
-    'button:has-text("Accept all")',
-    'button:has-text("OK")',
-    'button:has-text("Got it")',
-    '[aria-label*="accept" i]',
-    '[id*="accept" i]',
-    '[class*="accept" i]',
-  ];
-
-  for (const selector of clickSelectors) {
+  for (const selector of CLICK_SELECTORS) {
     try {
       const locator = page.locator(selector).first();
       const count = await locator.count();
@@ -323,7 +311,12 @@ await Actor.main(async () => {
                 await requestQueue.addRequest(
                   {
                     url: sitemapUrl,
-                    userData: { depth: 0, isSeed: true, isHome: false, specialFile: 'sitemap' } satisfies IRequestUserData,
+                    userData: {
+                      depth: 0,
+                      isSeed: true,
+                      isHome: false,
+                      specialFile: 'sitemap',
+                    } satisfies IRequestUserData,
                   },
                   { forefront: true },
                 );
@@ -332,7 +325,12 @@ await Actor.main(async () => {
               await requestQueue.addRequest(
                 {
                   url: sitemapFallbackUrl,
-                  userData: { depth: 0, isSeed: true, isHome: false, specialFile: 'sitemap' } satisfies IRequestUserData,
+                  userData: {
+                    depth: 0,
+                    isSeed: true,
+                    isHome: false,
+                    specialFile: 'sitemap',
+                  } satisfies IRequestUserData,
                 },
                 { forefront: true },
               );
@@ -396,7 +394,8 @@ await Actor.main(async () => {
 
         let metaDescription: string | undefined;
         try {
-          metaDescription = (await page.locator('meta[name="description"]').first().getAttribute('content')) ?? undefined;
+          metaDescription =
+            (await page.locator('meta[name="description"]').first().getAttribute('content')) ?? undefined;
         } catch {
           metaDescription = undefined;
         }
@@ -564,6 +563,12 @@ await Actor.main(async () => {
         return;
       }
 
+      warnings.push(`request-failed: ${ctx.request.url}: ${errorMessage}`);
+
+      if (requestUserData.isHome) {
+        return;
+      }
+
       pages.push({
         url: ctx.request.url,
         finalUrl: ctx.request.url,
@@ -574,8 +579,6 @@ await Actor.main(async () => {
         ...(storeHeaders ? { headers: undefined } : {}),
         error: errorMessage,
       });
-
-      warnings.push(`request-failed: ${ctx.request.url}: ${errorMessage}`);
     },
   });
 
@@ -594,6 +597,10 @@ await Actor.main(async () => {
   if (status === SNAPSHOT_STATUS.OK && !hasUsefulHome) {
     status = SNAPSHOT_STATUS.FAILED;
     fatalError = fatalError ?? 'no-home-snapshot';
+  }
+
+  if (status === SNAPSHOT_STATUS.FAILED) {
+    pages.length = 0;
   }
 
   const finishedAt = nowIso();
