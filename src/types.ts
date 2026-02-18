@@ -134,6 +134,25 @@ export interface ICyprusHotelSiteSnapshotInput {
   debug?: boolean;
 }
 
+export interface IPageLoadTimings {
+  /** Time from navigation start to full HTML (main document) download completion (ms). */
+  htmlMs?: number;
+  /** Time from navigation start to last finished image request observed (ms). */
+  htmlAndImagesMs?: number;
+  /** Time from navigation start to last finished media (audio/video) request observed (ms). */
+  htmlAndImagesAndMediaMs?: number;
+  /** How many image requests were observed (finished or failed) during the handler window. */
+  imageRequests: number;
+  /** How many media requests were observed (finished or failed) during the handler window. */
+  mediaRequests: number;
+  /** Whether we managed to reach the window.load event (best effort). */
+  loadEventReached: boolean;
+  /** Timeout used for waiting for load event (ms). */
+  loadEventWaitTimeoutMs: number;
+  /** Non-fatal notes about measurement quality. */
+  notes?: string[];
+}
+
 export interface ICrawledPageSnapshot {
   /** Page URL as requested. */
   url: string;
@@ -153,6 +172,8 @@ export interface ICrawledPageSnapshot {
   html?: string;
   /** Response headers (only if storeHeaders=true). */
   headers?: Record<string, string>;
+  /** Best-effort timings for HTML / images / media. */
+  timings?: IPageLoadTimings;
   /** Error message for failed requests, if any. */
   error?: string;
 }

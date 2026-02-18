@@ -1,6 +1,6 @@
 import { Actor, log } from 'apify';
 import { PlaywrightCrawler, RequestQueue, Dataset } from 'crawlee';
-import type { Page, Response } from 'playwright';
+import type { Page, Response, Request } from 'playwright';
 
 import {
   SNAPSHOT_STATUS,
@@ -12,6 +12,7 @@ import {
   type IConsentLog,
   type IViewport,
   type IHotelSiteSnapshotFiles,
+  type IPageLoadTimings,
 } from './types.js';
 
 import {
@@ -193,6 +194,149 @@ function statusLabel(status: number | undefined): string {
   return typeof status === 'number' ? String(status) : 'no-status';
 }
 
+function maxNumber(a: number | undefined, b: number): number {
+  if (typeof a !== 'number') return b;
+  return Math.max(a, b);
+}
+
+interface INetworkTimingTracker {
+  setMainDocumentFinishedAtMs(params: { finishedAtMs: number }): void;
+  buildTimings(params: { loadEventReached: boolean; loadEventWaitTimeoutMs: number; notes?: string[] }): IPageLoadTimings;
+  detach(): void;
+}
+
+function createNetworkTimingTracker(params: { page: Page }): INetworkTimingTracker {
+  const { page } = params;
+
+  const navigationStartAtMs = Date.now();
+
+  let mainDocumentFinishedAtMs: number | undefined;
+  let maxImageFinishedAtMs: number | undefined;
+  let maxMediaFinishedAtMs: number | undefined;
+
+  let imageRequests = 0;
+  let mediaRequests = 0;
+
+  function onRequestFinished(request: Request): void {
+    const finishedAtMs = Date.now();
+    const resourceType = request.resourceType();
+
+    if (resourceType === 'document' && request.isNavigationRequest()) {
+      mainDocumentFinishedAtMs = maxNumber(mainDocumentFinishedAtMs, finishedAtMs);
+      return;
+    }
+
+    if (resourceType === 'image') {
+      imageRequests += 1;
+      maxImageFinishedAtMs = maxNumber(maxImageFinishedAtMs, finishedAtMs);
+      return;
+    }
+
+    if (resourceType === 'media') {
+      mediaRequests += 1;
+      maxMediaFinishedAtMs = maxNumber(maxMediaFinishedAtMs, finishedAtMs);
+      return;
+    }
+  }
+
+  function onRequestFailed(request: Request): void {
+    const finishedAtMs = Date.now();
+    const resourceType = request.resourceType();
+
+    if (resourceType === 'image') {
+      imageRequests += 1;
+      maxImageFinishedAtMs = maxNumber(maxImageFinishedAtMs, finishedAtMs);
+      return;
+    }
+
+    if (resourceType === 'media') {
+      mediaRequests += 1;
+      maxMediaFinishedAtMs = maxNumber(maxMediaFinishedAtMs, finishedAtMs);
+      return;
+    }
+  }
+
+  page.on('requestfinished', onRequestFinished);
+  page.on('requestfailed', onRequestFailed);
+
+  return {
+    setMainDocumentFinishedAtMs({ finishedAtMs }: { finishedAtMs: number }): void {
+      mainDocumentFinishedAtMs = maxNumber(mainDocumentFinishedAtMs, finishedAtMs);
+    },
+
+    buildTimings({
+                   loadEventReached,
+                   loadEventWaitTimeoutMs,
+                   notes,
+                 }: {
+      loadEventReached: boolean;
+      loadEventWaitTimeoutMs: number;
+      notes?: string[];
+    }): IPageLoadTimings {
+      const htmlMs =
+        typeof mainDocumentFinishedAtMs === 'number' ? mainDocumentFinishedAtMs - navigationStartAtMs : undefined;
+
+      const imagesFinishedAtMs =
+        typeof maxImageFinishedAtMs === 'number'
+          ? Math.max(mainDocumentFinishedAtMs ?? navigationStartAtMs, maxImageFinishedAtMs)
+          : mainDocumentFinishedAtMs;
+
+      const htmlAndImagesMs =
+        typeof imagesFinishedAtMs === 'number' ? imagesFinishedAtMs - navigationStartAtMs : undefined;
+
+      const mediaFinishedAtMs =
+        typeof maxMediaFinishedAtMs === 'number'
+          ? Math.max(imagesFinishedAtMs ?? navigationStartAtMs, maxMediaFinishedAtMs)
+          : imagesFinishedAtMs;
+
+      const htmlAndImagesAndMediaMs =
+        typeof mediaFinishedAtMs === 'number' ? mediaFinishedAtMs - navigationStartAtMs : undefined;
+
+      const outNotes: string[] = [];
+      if (Array.isArray(notes) && notes.length) outNotes.push(...notes);
+      if (!loadEventReached) outNotes.push('load-event-timeout');
+
+      return {
+        htmlMs,
+        htmlAndImagesMs,
+        htmlAndImagesAndMediaMs,
+        imageRequests,
+        mediaRequests,
+        loadEventReached,
+        loadEventWaitTimeoutMs,
+        ...(outNotes.length ? { notes: outNotes } : {}),
+      };
+    },
+
+    detach(): void {
+      page.off('requestfinished', onRequestFinished);
+      page.off('requestfailed', onRequestFailed);
+    },
+  };
+}
+
+async function waitForResponseFinishedAtMs(params: { response: Response | null; timeoutMs: number }): Promise<number | undefined> {
+  const { response, timeoutMs } = params;
+  if (!response) return undefined;
+
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+
+  const timeoutPromise = new Promise<boolean>((resolve) => {
+    timeoutHandle = setTimeout(() => resolve(false), timeoutMs);
+  });
+
+  const finishedPromise = response
+    .finished()
+    .then(() => true)
+    .catch(() => false);
+
+  const ok = await Promise.race([finishedPromise, timeoutPromise]);
+
+  if (timeoutHandle) clearTimeout(timeoutHandle);
+
+  return ok ? Date.now() : undefined;
+}
+
 await Actor.main(async () => {
   const rawInput = await Actor.getInput<ICyprusHotelSiteSnapshotInput>();
   const input: Partial<ICyprusHotelSiteSnapshotInput> = rawInput ?? {};
@@ -221,6 +365,9 @@ await Actor.main(async () => {
   const takeHomeMobileScreenshot = Boolean(input.takeHomeMobileScreenshot ?? true);
   const tryDismissConsentFlag = Boolean(input.tryDismissConsent ?? true);
   const viewport = mergeViewport(input.homeMobileViewport);
+
+  const softLoadEventWaitTimeoutMs = clampInt(Math.min(input.navigationTimeoutMs ?? 10_000, 6000), 500, 6000);
+  const softHtmlFinishTimeoutMs = clampInt(Math.min(input.navigationTimeoutMs ?? 10_000, 8000), 500, 8000);
 
   if (input.debug) log.setLevel(log.LEVELS.DEBUG);
 
@@ -379,161 +526,192 @@ await Actor.main(async () => {
         return;
       }
 
-      if (isHome) {
-        if (!isOkHttpStatus(status)) {
-          throw new Error(`home-bad-status:${statusLabel(status)}`);
+      const networkTimingTracker = createNetworkTimingTracker({ page });
+
+      let loadEventReached = false;
+      const timingNotes: string[] = [];
+
+      try {
+        const htmlFinishedAtMs = await waitForResponseFinishedAtMs({ response, timeoutMs: softHtmlFinishTimeoutMs });
+        if (typeof htmlFinishedAtMs === 'number') {
+          networkTimingTracker.setMainDocumentFinishedAtMs({ finishedAtMs: htmlFinishedAtMs });
+        } else {
+          timingNotes.push('html-finish-timeout');
         }
 
-        if (!takeHomeMobileScreenshot) {
-          throw new Error('home-screenshot-disabled');
-        }
-
-        const notes: string[] = [];
-
-        const title = await page.title().catch(() => undefined);
-
-        let metaDescription: string | undefined;
         try {
-          metaDescription =
-            (await page.locator('meta[name="description"]').first().getAttribute('content')) ?? undefined;
+          await page.waitForLoadState('load', { timeout: softLoadEventWaitTimeoutMs });
+          loadEventReached = true;
         } catch {
-          metaDescription = undefined;
+          loadEventReached = false;
         }
 
-        await page.evaluate(() => window.scrollTo(0, 0)).catch(() => undefined);
-        await page.waitForTimeout(HOME_RENDER_WAIT_MS);
-
-        const mediaWait = await waitForAboveTheFoldMedia({ page, timeoutMs: HOME_MEDIA_WAIT_MS, pollIntervalMs: 250 });
-        if (!mediaWait.ok) notes.push(`media-wait:${mediaWait.reason ?? 'unknown'}`);
-
-        const screenshotContentType = 'image/png';
-
-        const screenshotKey1Raw = `home-mobile-${hotelId}-1.png`;
-        const buffer1 = await page.screenshot({ fullPage: false, type: 'png' });
-        await Actor.setValue(screenshotKey1Raw, buffer1, { contentType: screenshotContentType });
-
-        const consentAttempted = tryDismissConsentFlag;
-        let consentLog: IConsentLog[] = [];
-
-        if (tryDismissConsentFlag) consentLog = await tryDismissConsent(page);
-
-        await page
-          .evaluate((scrollY: number) => window.scrollBy(0, scrollY), Math.floor(viewport.height * 0.9))
-          .catch(() => undefined);
-        await page.waitForTimeout(SECOND_SCREENSHOT_WAIT_MS);
-
-        const screenshotKey2Raw = `home-mobile-${hotelId}-2.png`;
-        const buffer2 = await page.screenshot({ fullPage: false, type: 'png' });
-        await Actor.setValue(screenshotKey2Raw, buffer2, { contentType: screenshotContentType });
-
-        if (!storeId) notes.push('kvs-id-missing');
-
-        const screenshotUrl1 = storeId
-          ? buildKvsRecordPublicUrl({ storeId, key: screenshotKey1Raw })
-          : screenshotKey1Raw;
-
-        const screenshotUrl2 = storeId
-          ? buildKvsRecordPublicUrl({ storeId, key: screenshotKey2Raw })
-          : screenshotKey2Raw;
-
-        homeSnapshot = {
-          url: request.url,
-          finalUrl,
-          viewport,
-          startedAt: pageStartedAt,
-          finishedAt: pageFinishedAt,
-          status,
-          redirectChain,
-          consentAttempted,
-          consentLog,
-          screenshotKey: screenshotUrl1,
-          secondScreenshotKey: screenshotUrl2,
-          screenshotContentType,
-          title,
-          metaDescription,
-          notes: notes.length ? notes : undefined,
-        };
-
-        let html: string | undefined;
-        if (storeHtml && isProbablyHtml(contentType)) {
-          html = await page.content().catch(() => undefined);
-        }
-
-        pages.push({
-          url: request.url,
-          finalUrl,
-          status,
-          contentType,
-          redirectChain,
-          startedAt: pageStartedAt,
-          finishedAt: pageFinishedAt,
-          ...(storeHtml ? { html } : {}),
-          ...(storeHeaders ? { headers } : {}),
+        const timings = networkTimingTracker.buildTimings({
+          loadEventReached,
+          loadEventWaitTimeoutMs: softLoadEventWaitTimeoutMs,
+          notes: timingNotes.length ? timingNotes : undefined,
         });
 
-        if (!followUpQueued) {
-          followUpQueued = true;
+        if (isHome) {
+          if (!isOkHttpStatus(status)) {
+            throw new Error(`home-bad-status:${statusLabel(status)}`);
+          }
 
-          await requestQueue.addRequest(
-            {
-              url: robotsUrl,
-              userData: { depth: 0, isSeed: true, isHome: false, specialFile: 'robots' } satisfies IRequestUserData,
-            },
-            { forefront: true },
-          );
+          if (!takeHomeMobileScreenshot) {
+            throw new Error('home-screenshot-disabled');
+          }
 
-          await requestQueue.addRequest(
-            {
-              url: llmsUrl,
-              userData: { depth: 0, isSeed: true, isHome: false, specialFile: 'llms' } satisfies IRequestUserData,
-            },
-            { forefront: true },
-          );
+          const notes: string[] = [];
 
-          if (maxPages > 1) {
-            const extraSeedUrls = seedUrlsAll.filter((url) => url !== homeUrl);
-            for (const url of extraSeedUrls) {
-              await requestQueue.addRequest({
-                url,
-                userData: { depth: 0, isSeed: true, isHome: false } satisfies IRequestUserData,
-              });
+          const title = await page.title().catch(() => undefined);
+
+          let metaDescription: string | undefined;
+          try {
+            metaDescription =
+              (await page.locator('meta[name="description"]').first().getAttribute('content')) ?? undefined;
+          } catch {
+            metaDescription = undefined;
+          }
+
+          await page.evaluate(() => window.scrollTo(0, 0)).catch(() => undefined);
+          await page.waitForTimeout(HOME_RENDER_WAIT_MS);
+
+          const mediaWait = await waitForAboveTheFoldMedia({ page, timeoutMs: HOME_MEDIA_WAIT_MS, pollIntervalMs: 250 });
+          if (!mediaWait.ok) notes.push(`media-wait:${mediaWait.reason ?? 'unknown'}`);
+
+          const screenshotContentType = 'image/png';
+
+          const screenshotKey1Raw = `home-mobile-${hotelId}-1.png`;
+          const buffer1 = await page.screenshot({ fullPage: false, type: 'png' });
+          await Actor.setValue(screenshotKey1Raw, buffer1, { contentType: screenshotContentType });
+
+          const consentAttempted = tryDismissConsentFlag;
+          let consentLog: IConsentLog[] = [];
+
+          if (tryDismissConsentFlag) consentLog = await tryDismissConsent(page);
+
+          await page
+            .evaluate((scrollY: number) => window.scrollBy(0, scrollY), Math.floor(viewport.height * 0.9))
+            .catch(() => undefined);
+          await page.waitForTimeout(SECOND_SCREENSHOT_WAIT_MS);
+
+          const screenshotKey2Raw = `home-mobile-${hotelId}-2.png`;
+          const buffer2 = await page.screenshot({ fullPage: false, type: 'png' });
+          await Actor.setValue(screenshotKey2Raw, buffer2, { contentType: screenshotContentType });
+
+          if (!storeId) notes.push('kvs-id-missing');
+
+          const screenshotUrl1 = storeId
+            ? buildKvsRecordPublicUrl({ storeId, key: screenshotKey1Raw })
+            : screenshotKey1Raw;
+
+          const screenshotUrl2 = storeId
+            ? buildKvsRecordPublicUrl({ storeId, key: screenshotKey2Raw })
+            : screenshotKey2Raw;
+
+          homeSnapshot = {
+            url: request.url,
+            finalUrl,
+            viewport,
+            startedAt: pageStartedAt,
+            finishedAt: pageFinishedAt,
+            status,
+            redirectChain,
+            consentAttempted,
+            consentLog,
+            screenshotKey: screenshotUrl1,
+            secondScreenshotKey: screenshotUrl2,
+            screenshotContentType,
+            title,
+            metaDescription,
+            notes: notes.length ? notes : undefined,
+          };
+
+          let html: string | undefined;
+          if (storeHtml && isProbablyHtml(contentType)) {
+            html = await page.content().catch(() => undefined);
+          }
+
+          pages.push({
+            url: request.url,
+            finalUrl,
+            status,
+            contentType,
+            redirectChain,
+            startedAt: pageStartedAt,
+            finishedAt: pageFinishedAt,
+            ...(storeHtml ? { html } : {}),
+            ...(storeHeaders ? { headers } : {}),
+            timings,
+          });
+
+          if (!followUpQueued) {
+            followUpQueued = true;
+
+            await requestQueue.addRequest(
+              {
+                url: robotsUrl,
+                userData: { depth: 0, isSeed: true, isHome: false, specialFile: 'robots' } satisfies IRequestUserData,
+              },
+              { forefront: true },
+            );
+
+            await requestQueue.addRequest(
+              {
+                url: llmsUrl,
+                userData: { depth: 0, isSeed: true, isHome: false, specialFile: 'llms' } satisfies IRequestUserData,
+              },
+              { forefront: true },
+            );
+
+            if (maxPages > 1) {
+              const extraSeedUrls = seedUrlsAll.filter((url) => url !== homeUrl);
+              for (const url of extraSeedUrls) {
+                await requestQueue.addRequest({
+                  url,
+                  userData: { depth: 0, isSeed: true, isHome: false } satisfies IRequestUserData,
+                });
+              }
             }
           }
+        } else {
+          let html: string | undefined;
+
+          if (storeHtml && isProbablyHtml(contentType)) {
+            html = await page.content().catch(() => undefined);
+          }
+
+          pages.push({
+            url: request.url,
+            finalUrl,
+            status,
+            contentType,
+            redirectChain,
+            startedAt: pageStartedAt,
+            finishedAt: pageFinishedAt,
+            ...(storeHtml ? { html } : {}),
+            ...(storeHeaders ? { headers } : {}),
+            timings,
+          });
         }
-      } else {
-        let html: string | undefined;
 
-        if (storeHtml && isProbablyHtml(contentType)) {
-          html = await page.content().catch(() => undefined);
+        if (depth < maxDepth) {
+          await enqueueLinks({
+            strategy: 'same-domain',
+            transformRequestFunction: (enqueueRequest) => {
+              const nextDepth = depth + 1;
+              const nextUserData: IRequestUserData = {
+                depth: nextDepth,
+                isSeed: false,
+                isHome: enqueueRequest.url === homeUrl,
+              };
+              enqueueRequest.userData = nextUserData;
+              return enqueueRequest;
+            },
+          });
         }
-
-        pages.push({
-          url: request.url,
-          finalUrl,
-          status,
-          contentType,
-          redirectChain,
-          startedAt: pageStartedAt,
-          finishedAt: pageFinishedAt,
-          ...(storeHtml ? { html } : {}),
-          ...(storeHeaders ? { headers } : {}),
-        });
-      }
-
-      if (depth < maxDepth) {
-        await enqueueLinks({
-          strategy: 'same-domain',
-          transformRequestFunction: (enqueueRequest) => {
-            const nextDepth = depth + 1;
-            const nextUserData: IRequestUserData = {
-              depth: nextDepth,
-              isSeed: false,
-              isHome: enqueueRequest.url === homeUrl,
-            };
-            enqueueRequest.userData = nextUserData;
-            return enqueueRequest;
-          },
-        });
+      } finally {
+        networkTimingTracker.detach();
       }
     },
 
