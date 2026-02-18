@@ -112,6 +112,8 @@ export interface ICyprusHotelSiteSnapshotInput {
   maxDepth: number;
   /** Max requests per minute to keep load reasonable. */
   maxRequestsPerMinute: number;
+  /** Maximum number of retries per request (Crawlee retry mechanism). */
+  maxRequestRetries: number;
   /** Navigation timeout in milliseconds for page loads. */
   navigationTimeoutMs: number;
   /** Request timeout in milliseconds for each HTTP fetch. */

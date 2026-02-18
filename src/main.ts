@@ -265,8 +265,9 @@ await Actor.main(async () => {
   const maxPages = clampInt(input.maxPages ?? 25, 1, 500);
   const maxDepth = clampInt(input.maxDepth ?? 1, 0, 25);
   const maxRequestsPerMinute = clampInt(input.maxRequestsPerMinute ?? 60, 1, 6000);
-  const navigationTimeoutSecs = msToSecsCeil(input.navigationTimeoutMs ?? 45_000);
-  const requestHandlerTimeoutSecs = msToSecsCeil(input.requestTimeoutMs ?? 60_000);
+  const maxRequestRetries = clampInt(input.maxRequestRetries ?? 1, 0, 10);
+  const navigationTimeoutSecs = msToSecsCeil(input.navigationTimeoutMs ?? 15_000);
+  const requestHandlerTimeoutSecs = msToSecsCeil(input.requestTimeoutMs ?? 20_000);
   const storeHtml = Boolean(input.storeHtml ?? true);
   const storeHeaders = Boolean(input.storeHeaders ?? true);
   const takeHomeMobileScreenshot = Boolean(input.takeHomeMobileScreenshot ?? true);
@@ -305,6 +306,8 @@ await Actor.main(async () => {
 
   let files: IHotelSiteSnapshotFiles | undefined;
 
+  let successfulRequests = 0;
+
   const storeId = String(Actor.getEnv().defaultKeyValueStoreId ?? '').trim();
 
   let sitemapQueued = false;
@@ -315,6 +318,7 @@ await Actor.main(async () => {
     requestQueue,
     maxRequestsPerCrawl,
     maxRequestsPerMinute,
+    maxRequestRetries,
     navigationTimeoutSecs,
     requestHandlerTimeoutSecs,
     async requestHandler(ctx) {
@@ -358,6 +362,8 @@ await Actor.main(async () => {
             const sitemapFallbackUrl = buildSiteFileUrl(finalUrl ?? request.url, '/sitemap.xml');
 
             if (status === 200 && typeof bodyText === 'string' && bodyText.trim()) {
+              successfulRequests += 1;
+
               files = files ?? {};
               files.robotsTxt = bodyText;
 
@@ -420,6 +426,7 @@ await Actor.main(async () => {
           }
 
           if (status === 200 && typeof bodyText === 'string' && bodyText.trim()) {
+            successfulRequests += 1;
             files = files ?? {};
 
             if (specialFile === 'llms') {
@@ -451,6 +458,8 @@ await Actor.main(async () => {
           ...(storeHtml ? { html } : {}),
           ...(storeHeaders ? { headers } : {}),
         });
+
+        successfulRequests += 1;
 
         if (isHome && takeHomeMobileScreenshot) {
           const notes: string[] = [];
@@ -571,6 +580,14 @@ await Actor.main(async () => {
   } catch (e) {
     status = SNAPSHOT_STATUS.FAILED;
     fatalError = e instanceof Error ? e.message : String(e);
+  }
+
+  const hasUsefulFiles = Boolean(files && (files.robotsTxt || files.sitemapXml || files.llmsTxt));
+  const hasUsefulHome = Boolean(homeSnapshot);
+
+  if (status === SNAPSHOT_STATUS.OK && !hasUsefulHome) {
+    status = SNAPSHOT_STATUS.FAILED;
+    fatalError = fatalError ?? (hasUsefulFiles ? 'files-only-no-home' : 'no-home-snapshot');
   }
 
   const finishedAt = nowIso();
