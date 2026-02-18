@@ -28,7 +28,7 @@ import {
   waitForAboveTheFoldMedia,
   buildKvsRecordPublicUrl,
 } from './utils/index.js';
-import { CLICK_SELECTORS } from './const/index.js';
+import { CLICK_SELECTORS, EMAIL_DOMAINS } from './const/index.js';
 
 type SPECIAL_FILE_KIND = 'robots' | 'sitemap' | 'llms';
 
@@ -199,6 +199,50 @@ function maxNumber(a: number | undefined, b: number): number {
   return Math.max(a, b);
 }
 
+function normalizeDomainCandidate(rawDomain: string): string {
+  const trimmed = rawDomain.trim();
+  const withoutProtocol = trimmed.replace(/^\s*https?:\/\//i, '').replace(/^\s*\/\//, '');
+  const hostPortPath = withoutProtocol.split(/[/?#]/)[0] ?? '';
+  const hostPort = hostPortPath.trim();
+  const hostOnly = hostPort.split(':')[0] ?? '';
+  const lower = hostOnly.toLowerCase().replace(/\.+$/g, '');
+  const withoutWww = lower.startsWith('www.') ? lower.slice(4) : lower;
+  return withoutWww;
+}
+
+function isLikelyDomainHost(host: string): boolean {
+  if (!host) return false;
+  if (host.includes(' ')) return false;
+  if (host.includes('@')) return false;
+  if (host.includes('..')) return false;
+  if (!host.includes('.')) return false;
+  if (host.startsWith('.') || host.endsWith('.')) return false;
+  if (host.startsWith('-') || host.endsWith('-')) return false;
+  return /^[a-z0-9.-]+$/.test(host);
+}
+
+function validateInputDomainOrThrow(params: { rawDomain: string; emailDomains: string[] }): void {
+  const { rawDomain, emailDomains } = params;
+
+  const trimmed = rawDomain.trim();
+  if (!trimmed) throw new Error('invalid-domain:empty');
+
+  if (trimmed.includes('@')) {
+    throw new Error('invalid-domain:looks-like-email');
+  }
+
+  const host = normalizeDomainCandidate(trimmed);
+
+  if (!host) throw new Error('invalid-domain:empty-host');
+  if (!isLikelyDomainHost(host)) throw new Error(`invalid-domain:bad-format:${host}`);
+  if (!host.includes('.')) throw new Error(`invalid-domain:no-dot:${host}`);
+
+  const emailDomainSet = new Set(emailDomains.map((d) => d.toLowerCase()));
+  if (emailDomainSet.has(host)) {
+    throw new Error(`invalid-domain:email-provider:${host}`);
+  }
+}
+
 interface INetworkTimingTracker {
   setMainDocumentFinishedAtMs(params: { finishedAtMs: number }): void;
   buildTimings(params: { loadEventReached: boolean; loadEventWaitTimeoutMs: number; notes?: string[] }): IPageLoadTimings;
@@ -346,6 +390,8 @@ await Actor.main(async () => {
 
   if (!hotelId) throw new Error('Input.hotelId is required');
   if (!domain) throw new Error('Input.domain is required');
+
+  validateInputDomainOrThrow({ rawDomain: domain, emailDomains: EMAIL_DOMAINS });
 
   const homeUrl = normalizeDomainToHomeUrl(domain);
 
