@@ -26,19 +26,19 @@
     },
     "maxPages": {
       "title": "Max pages",
-      "description": "Maximum number of pages to crawl (including seed).",
+      "description": "Maximum number of pages to crawl (including seed). Keep this low (1-5) to reduce cost.",
       "type": "integer",
       "minimum": 1,
       "maximum": 500,
-      "default": 25
+      "default": 1
     },
     "maxDepth": {
       "title": "Max depth",
-      "description": "Maximum crawl depth from seed URLs (0 = only seed).",
+      "description": "Maximum crawl depth from seed URLs (0 = only seed). Keep 0 unless you really want deeper crawling.",
       "type": "integer",
       "minimum": 0,
       "maximum": 25,
-      "default": 1
+      "default": 0
     },
     "maxRequestsPerMinute": {
       "title": "Max requests per minute",
@@ -46,7 +46,7 @@
       "type": "integer",
       "minimum": 1,
       "maximum": 6000,
-      "default": 60
+      "default": 30
     },
     "maxRequestRetries": {
       "title": "Max request retries",
@@ -54,7 +54,7 @@
       "type": "integer",
       "minimum": 0,
       "maximum": 10,
-      "default": 1
+      "default": 0
     },
     "navigationTimeoutMs": {
       "title": "Navigation timeout (ms)",
@@ -62,7 +62,7 @@
       "type": "integer",
       "minimum": 1000,
       "maximum": 300000,
-      "default": 15000
+      "default": 10000
     },
     "requestTimeoutMs": {
       "title": "Request handler timeout (ms)",
@@ -70,7 +70,7 @@
       "type": "integer",
       "minimum": 1000,
       "maximum": 300000,
-      "default": 20000
+      "default": 15000
     },
     "storeHtml": {
       "title": "Store HTML",

@@ -51,6 +51,11 @@ const DEFAULT_VIEWPORT: IViewport = {
 const MAX_SITEMAP_URLS_FROM_ROBOTS = 10;
 const SPECIAL_REQUEST_BUDGET = 2 + MAX_SITEMAP_URLS_FROM_ROBOTS; // robots + llms + up to N sitemap urls
 
+const HOME_RENDER_WAIT_MS = 1000;
+const HOME_MEDIA_WAIT_MS = 2000;
+const CONSENT_CLICK_TIMEOUT_MS = 800;
+const SECOND_SCREENSHOT_WAIT_MS = 400;
+
 function mergeViewport(partialViewport?: Partial<IViewport>): IViewport {
   return { ...DEFAULT_VIEWPORT, ...(partialViewport ?? {}) };
 }
@@ -155,7 +160,7 @@ async function tryDismissConsent(page: Page): Promise<IConsentLog[]> {
       const count = await locator.count();
       if (count === 0) continue;
 
-      await locator.click({ timeout: 1500 });
+      await locator.click({ timeout: CONSENT_CLICK_TIMEOUT_MS });
       add({ type: CONSENT_ACTION_TYPE.CLICK, label: 'consent-click', selector, ok: true });
       return logs;
     } catch (e) {
@@ -170,60 +175,6 @@ async function tryDismissConsent(page: Page): Promise<IConsentLog[]> {
   }
 
   return logs;
-}
-
-function buildHomeSnapshot(params: {
-  url: string;
-  finalUrl?: string;
-  viewport: IViewport;
-  startedAt: string;
-  finishedAt: string;
-  status?: number;
-  redirectChain: ReturnType<typeof buildRedirectChainSimple>;
-  consentAttempted: boolean;
-  consentLog: IConsentLog[];
-  screenshotKey: string;
-  secondScreenshotKey: string;
-  screenshotContentType: string;
-  title?: string;
-  metaDescription?: string;
-  notes?: string[];
-}): IHomeMobileSnapshot {
-  const {
-    url,
-    finalUrl,
-    viewport,
-    startedAt,
-    finishedAt,
-    status,
-    redirectChain,
-    consentAttempted,
-    consentLog,
-    screenshotKey,
-    secondScreenshotKey,
-    screenshotContentType,
-    title,
-    metaDescription,
-    notes,
-  } = params;
-
-  return {
-    url,
-    finalUrl,
-    viewport,
-    startedAt,
-    finishedAt,
-    status,
-    redirectChain,
-    consentAttempted,
-    consentLog,
-    screenshotKey,
-    secondScreenshotKey,
-    screenshotContentType,
-    title,
-    metaDescription,
-    notes,
-  };
 }
 
 async function readResponseText(response: Response | null): Promise<string | undefined> {
@@ -245,6 +196,15 @@ async function readResponseText(response: Response | null): Promise<string | und
   }
 }
 
+function isOkHttpStatus(status: number | undefined): boolean {
+  if (typeof status !== 'number') return false;
+  return status >= 200 && status < 400;
+}
+
+function statusLabel(status: number | undefined): string {
+  return typeof status === 'number' ? String(status) : 'no-status';
+}
+
 await Actor.main(async () => {
   const rawInput = await Actor.getInput<ICyprusHotelSiteSnapshotInput>();
   const input: Partial<ICyprusHotelSiteSnapshotInput> = rawInput ?? {};
@@ -260,14 +220,14 @@ await Actor.main(async () => {
   const robotsUrl = buildSiteFileUrl(homeUrl, '/robots.txt');
   const llmsUrl = buildSiteFileUrl(homeUrl, '/llms.txt');
 
-  const seedUrls = uniqStrings([...(input.seedUrls ?? []), homeUrl]).map(ensureHttpsUrl);
+  const seedUrlsAll = uniqStrings([...(input.seedUrls ?? []), homeUrl]).map(ensureHttpsUrl);
 
-  const maxPages = clampInt(input.maxPages ?? 25, 1, 500);
-  const maxDepth = clampInt(input.maxDepth ?? 1, 0, 25);
-  const maxRequestsPerMinute = clampInt(input.maxRequestsPerMinute ?? 60, 1, 6000);
-  const maxRequestRetries = clampInt(input.maxRequestRetries ?? 1, 0, 10);
-  const navigationTimeoutSecs = msToSecsCeil(input.navigationTimeoutMs ?? 15_000);
-  const requestHandlerTimeoutSecs = msToSecsCeil(input.requestTimeoutMs ?? 20_000);
+  const maxPages = clampInt(input.maxPages ?? 1, 1, 500);
+  const maxDepth = clampInt(input.maxDepth ?? 0, 0, 25);
+  const maxRequestsPerMinute = clampInt(input.maxRequestsPerMinute ?? 30, 1, 6000);
+  const maxRequestRetries = clampInt(input.maxRequestRetries ?? 0, 0, 10);
+  const navigationTimeoutSecs = msToSecsCeil(input.navigationTimeoutMs ?? 10_000);
+  const requestHandlerTimeoutSecs = msToSecsCeil(input.requestTimeoutMs ?? 15_000);
   const storeHtml = Boolean(input.storeHtml ?? true);
   const storeHeaders = Boolean(input.storeHeaders ?? true);
   const takeHomeMobileScreenshot = Boolean(input.takeHomeMobileScreenshot ?? true);
@@ -279,40 +239,22 @@ await Actor.main(async () => {
   const startedAt = nowIso();
   const requestQueue = await RequestQueue.open();
 
-  for (const url of seedUrls) {
-    const userData: IRequestUserData = { depth: 0, isSeed: true, isHome: url === homeUrl };
-    await requestQueue.addRequest({ url, userData });
-  }
-
-  await requestQueue.addRequest(
-    {
-      url: robotsUrl,
-      userData: { depth: 0, isSeed: true, isHome: false, specialFile: 'robots' },
-    },
-    { forefront: true },
-  );
-
-  await requestQueue.addRequest(
-    {
-      url: llmsUrl,
-      userData: { depth: 0, isSeed: true, isHome: false, specialFile: 'llms' },
-    },
-    { forefront: true },
-  );
-
   const pages: ICrawledPageSnapshot[] = [];
   let homeSnapshot: IHomeMobileSnapshot | undefined;
   const warnings: string[] = [];
-
   let files: IHotelSiteSnapshotFiles | undefined;
-
-  let successfulRequests = 0;
 
   const storeId = String(Actor.getEnv().defaultKeyValueStoreId ?? '').trim();
 
+  let followUpQueued = false;
   let sitemapQueued = false;
 
   const maxRequestsPerCrawl = maxPages + SPECIAL_REQUEST_BUDGET;
+
+  await requestQueue.addRequest({
+    url: homeUrl,
+    userData: { depth: 0, isSeed: true, isHome: true } satisfies IRequestUserData,
+  });
 
   const crawler = new PlaywrightCrawler({
     requestQueue,
@@ -321,126 +263,245 @@ await Actor.main(async () => {
     maxRequestRetries,
     navigationTimeoutSecs,
     requestHandlerTimeoutSecs,
+
     async requestHandler(ctx) {
       const { request, page, enqueueLinks } = ctx;
 
       const requestUserData = parseRequestUserData(request.userData);
-
       const depth = requestUserData.depth;
       const isHome = requestUserData.isHome;
       const specialFile = requestUserData.specialFile;
 
       const pageStartedAt = nowIso();
 
+      let response: Response | null = null;
       let status: number | undefined;
       let finalUrl: string | undefined;
       let headers: Record<string, string> | undefined;
       let contentType: string | undefined;
 
-      try {
+      if (!specialFile) {
         await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      }
 
-        const response = await page.goto(request.url, { waitUntil: 'domcontentloaded' });
-        status = response?.status();
-        finalUrl = response?.url() ?? page.url();
+      response = await page.goto(request.url, { waitUntil: 'domcontentloaded' });
+      status = response?.status();
+      finalUrl = response?.url() ?? page.url();
 
-        try {
-          headers = response ? response.headers() : undefined;
-        } catch {
-          headers = undefined;
-        }
+      try {
+        headers = response ? response.headers() : undefined;
+      } catch {
+        headers = undefined;
+      }
 
-        contentType = pickHeader(headers, 'content-type');
+      contentType = pickHeader(headers, 'content-type');
 
-        const redirectChain = buildRedirectChainSimple({ url: request.url, finalUrl, status });
-        const pageFinishedAt = nowIso();
+      const redirectChain = buildRedirectChainSimple({ url: request.url, finalUrl, status });
+      const pageFinishedAt = nowIso();
 
-        if (specialFile) {
-          const bodyText = await readResponseText(response ?? null);
+      if (specialFile) {
+        const bodyText = await readResponseText(response);
 
-          if (specialFile === 'robots') {
-            const sitemapFallbackUrl = buildSiteFileUrl(finalUrl ?? request.url, '/sitemap.xml');
+        if (specialFile === 'robots') {
+          const sitemapFallbackUrl = buildSiteFileUrl(finalUrl ?? request.url, '/sitemap.xml');
 
-            if (status === 200 && typeof bodyText === 'string' && bodyText.trim()) {
-              successfulRequests += 1;
+          if (status === 200 && typeof bodyText === 'string' && bodyText.trim()) {
+            files = files ?? {};
+            files.robotsTxt = bodyText;
 
-              files = files ?? {};
-              files.robotsTxt = bodyText;
+            const sitemapUrlsAll = resolveSitemapUrls({
+              robotsText: bodyText,
+              baseUrl: finalUrl ?? request.url,
+            });
 
-              const sitemapUrlsAll = resolveSitemapUrls({
-                robotsText: bodyText,
-                baseUrl: finalUrl ?? request.url,
-              });
+            const sitemapUrls = sitemapUrlsAll.slice(0, MAX_SITEMAP_URLS_FROM_ROBOTS);
 
-              const sitemapUrls = sitemapUrlsAll.slice(0, MAX_SITEMAP_URLS_FROM_ROBOTS);
+            sitemapQueued = true;
 
-              sitemapQueued = true;
-
-              if (sitemapUrls.length) {
-                for (const sitemapUrl of sitemapUrls) {
-                  await requestQueue.addRequest(
-                    {
-                      url: sitemapUrl,
-                      userData: { depth: 0, isSeed: true, isHome: false, specialFile: 'sitemap' },
-                    },
-                    { forefront: true },
-                  );
-                }
-              } else {
+            if (sitemapUrls.length) {
+              for (const sitemapUrl of sitemapUrls) {
                 await requestQueue.addRequest(
                   {
-                    url: sitemapFallbackUrl,
-                    userData: { depth: 0, isSeed: true, isHome: false, specialFile: 'sitemap' },
+                    url: sitemapUrl,
+                    userData: { depth: 0, isSeed: true, isHome: false, specialFile: 'sitemap' } satisfies IRequestUserData,
                   },
                   { forefront: true },
                 );
               }
-
-              if (sitemapUrlsAll.length > MAX_SITEMAP_URLS_FROM_ROBOTS) {
-                warnings.push(
-                  `robots-sitemap-limit: ${finalUrl ?? request.url}: found ${sitemapUrlsAll.length}, queued ${MAX_SITEMAP_URLS_FROM_ROBOTS}`,
-                );
-              }
-
-              return;
-            }
-
-            if (!sitemapQueued) {
-              sitemapQueued = true;
+            } else {
               await requestQueue.addRequest(
                 {
                   url: sitemapFallbackUrl,
-                  userData: { depth: 0, isSeed: true, isHome: false, specialFile: 'sitemap' },
+                  userData: { depth: 0, isSeed: true, isHome: false, specialFile: 'sitemap' } satisfies IRequestUserData,
                 },
                 { forefront: true },
+              );
+            }
+
+            if (sitemapUrlsAll.length > MAX_SITEMAP_URLS_FROM_ROBOTS) {
+              warnings.push(
+                `robots-sitemap-limit: ${finalUrl ?? request.url}: found ${sitemapUrlsAll.length}, queued ${MAX_SITEMAP_URLS_FROM_ROBOTS}`,
               );
             }
 
             return;
           }
 
-          if (specialFile === 'sitemap') {
-            const statusLabel = typeof status === 'number' ? String(status) : 'no-status';
-            if (status !== 200) warnings.push(`sitemap-non-200: ${request.url}: ${statusLabel}`);
-            if (status === 200 && (!bodyText || !bodyText.trim())) warnings.push(`sitemap-empty: ${request.url}`);
-          }
-
-          if (status === 200 && typeof bodyText === 'string' && bodyText.trim()) {
-            successfulRequests += 1;
-            files = files ?? {};
-
-            if (specialFile === 'llms') {
-              files.llmsTxt = bodyText;
-            }
-
-            if (specialFile === 'sitemap') {
-              files.sitemapXml = bodyText;
-            }
+          if (!sitemapQueued) {
+            sitemapQueued = true;
+            await requestQueue.addRequest(
+              {
+                url: sitemapFallbackUrl,
+                userData: { depth: 0, isSeed: true, isHome: false, specialFile: 'sitemap' } satisfies IRequestUserData,
+              },
+              { forefront: true },
+            );
           }
 
           return;
         }
 
+        if (specialFile === 'sitemap') {
+          if (status !== 200) warnings.push(`sitemap-non-200: ${request.url}: ${statusLabel(status)}`);
+          if (status === 200 && (!bodyText || !bodyText.trim())) warnings.push(`sitemap-empty: ${request.url}`);
+        }
+
+        if (status === 200 && typeof bodyText === 'string' && bodyText.trim()) {
+          files = files ?? {};
+
+          if (specialFile === 'llms') {
+            files.llmsTxt = bodyText;
+          }
+
+          if (specialFile === 'sitemap') {
+            files.sitemapXml = bodyText;
+          }
+        }
+
+        return;
+      }
+
+      if (isHome) {
+        if (!isOkHttpStatus(status)) {
+          throw new Error(`home-bad-status:${statusLabel(status)}`);
+        }
+
+        if (!takeHomeMobileScreenshot) {
+          throw new Error('home-screenshot-disabled');
+        }
+
+        const notes: string[] = [];
+
+        const title = await page.title().catch(() => undefined);
+
+        let metaDescription: string | undefined;
+        try {
+          metaDescription = (await page.locator('meta[name="description"]').first().getAttribute('content')) ?? undefined;
+        } catch {
+          metaDescription = undefined;
+        }
+
+        await page.evaluate(() => window.scrollTo(0, 0)).catch(() => undefined);
+        await page.waitForTimeout(HOME_RENDER_WAIT_MS);
+
+        const mediaWait = await waitForAboveTheFoldMedia({ page, timeoutMs: HOME_MEDIA_WAIT_MS, pollIntervalMs: 250 });
+        if (!mediaWait.ok) notes.push(`media-wait:${mediaWait.reason ?? 'unknown'}`);
+
+        const screenshotContentType = 'image/png';
+
+        const screenshotKey1Raw = `home-mobile-${hotelId}-1.png`;
+        const buffer1 = await page.screenshot({ fullPage: false, type: 'png' });
+        await Actor.setValue(screenshotKey1Raw, buffer1, { contentType: screenshotContentType });
+
+        const consentAttempted = tryDismissConsentFlag;
+        let consentLog: IConsentLog[] = [];
+
+        if (tryDismissConsentFlag) consentLog = await tryDismissConsent(page);
+
+        await page
+          .evaluate((scrollY: number) => window.scrollBy(0, scrollY), Math.floor(viewport.height * 0.9))
+          .catch(() => undefined);
+        await page.waitForTimeout(SECOND_SCREENSHOT_WAIT_MS);
+
+        const screenshotKey2Raw = `home-mobile-${hotelId}-2.png`;
+        const buffer2 = await page.screenshot({ fullPage: false, type: 'png' });
+        await Actor.setValue(screenshotKey2Raw, buffer2, { contentType: screenshotContentType });
+
+        if (!storeId) notes.push('kvs-id-missing');
+
+        const screenshotUrl1 = storeId
+          ? buildKvsRecordPublicUrl({ storeId, key: screenshotKey1Raw })
+          : screenshotKey1Raw;
+
+        const screenshotUrl2 = storeId
+          ? buildKvsRecordPublicUrl({ storeId, key: screenshotKey2Raw })
+          : screenshotKey2Raw;
+
+        homeSnapshot = {
+          url: request.url,
+          finalUrl,
+          viewport,
+          startedAt: pageStartedAt,
+          finishedAt: pageFinishedAt,
+          status,
+          redirectChain,
+          consentAttempted,
+          consentLog,
+          screenshotKey: screenshotUrl1,
+          secondScreenshotKey: screenshotUrl2,
+          screenshotContentType,
+          title,
+          metaDescription,
+          notes: notes.length ? notes : undefined,
+        };
+
+        let html: string | undefined;
+        if (storeHtml && isProbablyHtml(contentType)) {
+          html = await page.content().catch(() => undefined);
+        }
+
+        pages.push({
+          url: request.url,
+          finalUrl,
+          status,
+          contentType,
+          redirectChain,
+          startedAt: pageStartedAt,
+          finishedAt: pageFinishedAt,
+          ...(storeHtml ? { html } : {}),
+          ...(storeHeaders ? { headers } : {}),
+        });
+
+        if (!followUpQueued) {
+          followUpQueued = true;
+
+          await requestQueue.addRequest(
+            {
+              url: robotsUrl,
+              userData: { depth: 0, isSeed: true, isHome: false, specialFile: 'robots' } satisfies IRequestUserData,
+            },
+            { forefront: true },
+          );
+
+          await requestQueue.addRequest(
+            {
+              url: llmsUrl,
+              userData: { depth: 0, isSeed: true, isHome: false, specialFile: 'llms' } satisfies IRequestUserData,
+            },
+            { forefront: true },
+          );
+
+          if (maxPages > 1) {
+            const extraSeedUrls = seedUrlsAll.filter((url) => url !== homeUrl);
+            for (const url of extraSeedUrls) {
+              await requestQueue.addRequest({
+                url,
+                userData: { depth: 0, isSeed: true, isHome: false } satisfies IRequestUserData,
+              });
+            }
+          }
+        }
+      } else {
         let html: string | undefined;
 
         if (storeHtml && isProbablyHtml(contentType)) {
@@ -458,117 +519,63 @@ await Actor.main(async () => {
           ...(storeHtml ? { html } : {}),
           ...(storeHeaders ? { headers } : {}),
         });
-
-        successfulRequests += 1;
-
-        if (isHome && takeHomeMobileScreenshot) {
-          const notes: string[] = [];
-
-          const title = await page.title().catch(() => undefined);
-
-          let metaDescription: string | undefined;
-          try {
-            metaDescription =
-              (await page.locator('meta[name="description"]').first().getAttribute('content')) ?? undefined;
-          } catch {
-            metaDescription = undefined;
-          }
-
-          await page.evaluate(() => window.scrollTo(0, 0)).catch(() => undefined);
-          await page.waitForTimeout(3000);
-
-          const mediaWait = await waitForAboveTheFoldMedia({ page, timeoutMs: 5000, pollIntervalMs: 250 });
-          if (!mediaWait.ok) notes.push(`media-wait:${mediaWait.reason ?? 'unknown'}`);
-
-          const screenshotContentType = 'image/png';
-          const screenshotKey1Raw = `home-mobile-${hotelId}-1.png`;
-          const buffer1 = await page.screenshot({ fullPage: false, type: 'png' });
-
-          await Actor.setValue(screenshotKey1Raw, buffer1, { contentType: screenshotContentType });
-
-          const consentAttempted = tryDismissConsentFlag;
-          let consentLog: IConsentLog[] = [];
-
-          if (tryDismissConsentFlag) consentLog = await tryDismissConsent(page);
-
-          await page
-            .evaluate((scrollY: number) => window.scrollBy(0, scrollY), Math.floor(viewport.height * 0.9))
-            .catch(() => undefined);
-          await page.waitForTimeout(800);
-
-          const screenshotKey2Raw = `home-mobile-${hotelId}-2.png`;
-          const buffer2 = await page.screenshot({ fullPage: false, type: 'png' });
-
-          await Actor.setValue(screenshotKey2Raw, buffer2, { contentType: screenshotContentType });
-
-          if (!storeId) notes.push('kvs-id-missing');
-
-          const screenshotUrl1 = storeId
-            ? buildKvsRecordPublicUrl({ storeId, key: screenshotKey1Raw })
-            : screenshotKey1Raw;
-
-          const screenshotUrl2 = storeId
-            ? buildKvsRecordPublicUrl({ storeId, key: screenshotKey2Raw })
-            : screenshotKey2Raw;
-
-          homeSnapshot = buildHomeSnapshot({
-            url: request.url,
-            finalUrl,
-            viewport,
-            startedAt: pageStartedAt,
-            finishedAt: pageFinishedAt,
-            status,
-            redirectChain,
-            consentAttempted,
-            consentLog,
-            screenshotKey: screenshotUrl1,
-            secondScreenshotKey: screenshotUrl2,
-            screenshotContentType,
-            title,
-            metaDescription,
-            notes: notes.length ? notes : undefined,
-          });
-        }
-
-        if (depth < maxDepth) {
-          await enqueueLinks({
-            strategy: 'same-domain',
-            transformRequestFunction: (enqueueRequest) => {
-              const nextDepth = depth + 1;
-              const nextUserData: IRequestUserData = {
-                depth: nextDepth,
-                isSeed: false,
-                isHome: enqueueRequest.url === homeUrl,
-              };
-              enqueueRequest.userData = nextUserData;
-              return enqueueRequest;
-            },
-          });
-        }
-      } catch (e) {
-        const pageFinishedAt = nowIso();
-        finalUrl = finalUrl ?? page.url();
-
-        const redirectChain = buildRedirectChainSimple({ url: request.url, finalUrl, status });
-        const error = e instanceof Error ? e.message : String(e);
-
-        if (!specialFile) {
-          pages.push({
-            url: request.url,
-            finalUrl,
-            status,
-            contentType,
-            redirectChain,
-            startedAt: pageStartedAt,
-            finishedAt: pageFinishedAt,
-            ...(storeHtml ? { html: undefined } : {}),
-            ...(storeHeaders ? { headers } : {}),
-            error,
-          });
-        }
-
-        warnings.push(`request-failed: ${request.url}: ${error}`);
       }
+
+      if (depth < maxDepth) {
+        await enqueueLinks({
+          strategy: 'same-domain',
+          transformRequestFunction: (enqueueRequest) => {
+            const nextDepth = depth + 1;
+            const nextUserData: IRequestUserData = {
+              depth: nextDepth,
+              isSeed: false,
+              isHome: enqueueRequest.url === homeUrl,
+            };
+            enqueueRequest.userData = nextUserData;
+            return enqueueRequest;
+          },
+        });
+      }
+    },
+
+    async failedRequestHandler(ctx) {
+      const requestUserData = parseRequestUserData(ctx.request.userData);
+      const errorMessage = ctx.error instanceof Error ? ctx.error.message : String(ctx.error);
+
+      const finishedAt = nowIso();
+      const startedAt = finishedAt;
+
+      if (requestUserData.specialFile) {
+        warnings.push(`request-failed: ${ctx.request.url}: ${errorMessage}`);
+
+        if (requestUserData.specialFile === 'robots' && !sitemapQueued) {
+          sitemapQueued = true;
+          const sitemapFallbackUrl = buildSiteFileUrl(ctx.request.url, '/sitemap.xml');
+
+          await requestQueue.addRequest(
+            {
+              url: sitemapFallbackUrl,
+              userData: { depth: 0, isSeed: true, isHome: false, specialFile: 'sitemap' } satisfies IRequestUserData,
+            },
+            { forefront: true },
+          );
+        }
+
+        return;
+      }
+
+      pages.push({
+        url: ctx.request.url,
+        finalUrl: ctx.request.url,
+        redirectChain: buildRedirectChainSimple({ url: ctx.request.url, finalUrl: ctx.request.url }),
+        startedAt,
+        finishedAt,
+        ...(storeHtml ? { html: undefined } : {}),
+        ...(storeHeaders ? { headers: undefined } : {}),
+        error: errorMessage,
+      });
+
+      warnings.push(`request-failed: ${ctx.request.url}: ${errorMessage}`);
     },
   });
 
@@ -582,12 +589,11 @@ await Actor.main(async () => {
     fatalError = e instanceof Error ? e.message : String(e);
   }
 
-  const hasUsefulFiles = Boolean(files && (files.robotsTxt || files.sitemapXml || files.llmsTxt));
   const hasUsefulHome = Boolean(homeSnapshot);
 
   if (status === SNAPSHOT_STATUS.OK && !hasUsefulHome) {
     status = SNAPSHOT_STATUS.FAILED;
-    fatalError = fatalError ?? (hasUsefulFiles ? 'files-only-no-home' : 'no-home-snapshot');
+    fatalError = fatalError ?? 'no-home-snapshot';
   }
 
   const finishedAt = nowIso();
